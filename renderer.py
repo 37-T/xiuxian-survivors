@@ -6,7 +6,7 @@ import math
 from pathlib import Path
 import pygame
 
-from game import Game, HEIGHT, RUN_LENGTH, UPGRADES, WIDTH
+from game import EVOLUTIONS, Game, HEIGHT, RUN_LENGTH, UPGRADES, WIDTH
 
 
 class Renderer:
@@ -14,51 +14,46 @@ class Renderer:
         self.fonts: dict[int, pygame.font.Font] = {}
         self.player_art: dict[str, dict[str, list[pygame.Surface]]] = {}
         self.enemy_art: dict[str, pygame.Surface] = {}
+        self.enemy_rims: dict[str, pygame.Surface] = {}
+        self.background_art: dict[str, pygame.Surface] = {}
+        self.hit_overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
         self.load_art()
 
     def load_art(self) -> None:
-        root = Path(__file__).resolve().parent / "assets" / "third_party"
-        male_sheet = pygame.image.load(str(root / "player_male.png")).convert_alpha()
+        root = Path(__file__).resolve().parent / "assets" / "characters"
+        for key, filename in (("male", "yungui.png"), ("female", "luoli.png")):
+            sprite = pygame.image.load(str(root / filename)).convert_alpha()
+            sprite = pygame.transform.scale(sprite, (48, 56))
+            mirrored = pygame.transform.flip(sprite, True, False)
+            self.player_art[key] = {
+                "down": [sprite],
+                "up": [sprite],
+                "left": [mirrored],
+                "right": [sprite],
+            }
 
-        def male_frame(row: int, column: int) -> pygame.Surface:
-            frame = male_sheet.subsurface((column * 40, row * 64, 40, 64)).copy()
-            return pygame.transform.scale(frame, (32, 48))
-
-        side = [male_frame(1, i) for i in range(4)]
-        self.player_art["male"] = {
-            "down": [male_frame(0, 0), male_frame(0, 1)],
-            "up": [male_frame(0, 2), male_frame(0, 3)],
-            "left": side,
-            "right": [pygame.transform.flip(sprite, True, False) for sprite in side],
-        }
-
-        julia_dir = root / "julia" / "Sprite-Sheets-Julia"
-        female_files = {
-            "down": "Julia_walk_Foward_64x64.png",
-            "up": "Julia_walk_Up_64x64.png",
-            "left": "Julia_walk_Left_64x64.png",
-            "right": "Julia_walk_Rigth_64x64.png",
-        }
-        self.player_art["female"] = {}
-        for direction, filename in female_files.items():
-            sheet = pygame.image.load(str(julia_dir / filename)).convert_alpha()
-            self.player_art["female"][direction] = [
-                pygame.transform.scale(sheet.subsurface((i * 64, 0, 64, 64)).copy(), (44, 48))
-                for i in range(4)
-            ]
-
-        creature_dir = root / "miteclops"
+        creature_dir = Path(__file__).resolve().parent / "assets" / "enemies"
         creature_files = {
-            "wisp": ("Miteclops Yellow.png", (16, 25)),
-            "wolf": ("Miteclops Red.png", (20, 29)),
-            "brute": ("Red Eye Stalagmite.png", (24, 35)),
-            "elite": ("Yellow Eye Stalagmite.png", (40, 54)),
+            "raven": ("raven.png", (28, 32)),
+            "wolf": ("wolf.png", (30, 30)),
+            "toad_boss": ("toad_boss.png", (48, 44)),
         }
         for kind, (filename, size) in creature_files.items():
             image = pygame.image.load(str(creature_dir / filename)).convert_alpha()
-            bounds = image.get_bounding_rect(min_alpha=1)
-            image = image.subsurface(bounds).copy()
-            self.enemy_art[kind] = pygame.transform.scale(image, size)
+            image = pygame.transform.scale(image, size)
+            self.enemy_art[kind] = image
+            rim_color = {
+                "raven": (72, 157, 188, 150),
+                "wolf": (210, 133, 86, 145),
+                "toad_boss": (169, 103, 203, 170),
+            }[kind]
+            self.enemy_rims[kind] = pygame.mask.from_surface(image).to_surface(
+                setcolor=rim_color, unsetcolor=(0, 0, 0, 0))
+
+        background_dir = Path(__file__).resolve().parent / "assets" / "backgrounds"
+        for key in ("raven_realm", "wolf_realm", "toad_realm"):
+            image = pygame.image.load(str(background_dir / f"{key}.png")).convert()
+            self.background_art[key] = pygame.transform.scale(image, (WIDTH, HEIGHT))
 
     def font(self, size: int) -> pygame.font.Font:
         if size not in self.fonts:
@@ -83,6 +78,10 @@ class Renderer:
             self.menu(surface, game)
             return
         self.world(surface, game)
+        if game.shake > 0:
+            alpha = min(58, int(game.shake * 18))
+            self.hit_overlay.fill((156, 38, 58, alpha))
+            surface.blit(self.hit_overlay, (0, 0))
         self.hud(surface, game)
         if game.state == "upgrade":
             self.upgrade(surface, game)
@@ -98,6 +97,22 @@ class Renderer:
         return f"{int(seconds) // 60:02d}:{int(seconds) % 60:02d}"
 
     def background(self, surface: pygame.Surface, t: float) -> None:
+        if self.background_art:
+            key = "raven_realm" if t < RUN_LENGTH / 3 else "wolf_realm" if t < RUN_LENGTH else "toad_realm"
+            surface.blit(self.background_art[key], (0, 0))
+            mote_colors = {
+                "raven_realm": (146, 194, 208),
+                "wolf_realm": (219, 170, 111),
+                "toad_realm": (180, 135, 222),
+            }
+            mote = mote_colors[key]
+            for i in range(13):
+                x = (i * 83 + int(t * (4 + i % 3))) % WIDTH
+                y = 58 + (i * 47 + int(math.sin(t * 0.7 + i) * 5)) % 184
+                surface.set_at((x, y), mote)
+                if i % 4 == 0:
+                    surface.set_at((x + 1, y), (min(255, mote[0] + 38), min(255, mote[1] + 38), min(255, mote[2] + 38)))
+            return
         surface.fill((15, 22, 37))
         # Pixelated mountain silhouettes and softly glimmering spirit lights.
         pygame.draw.rect(surface, (19, 31, 45), (0, 190, WIDTH, 80))
@@ -120,15 +135,32 @@ class Renderer:
             pygame.draw.rect(surface, (36, 52, 59), (x, y, 4 + i % 5, 1))
 
     def world(self, surface: pygame.Surface, game: Game) -> None:
+        for hazard in game.hazards:
+            pulse = int(2 * math.sin(game.time * 5))
+            pygame.draw.ellipse(surface, (54, 33, 77), (int(hazard.x - hazard.radius), int(hazard.y - hazard.radius // 2), hazard.radius * 2, hazard.radius))
+            pygame.draw.ellipse(surface, (113 + pulse, 68, 141), (int(hazard.x - hazard.radius + 3), int(hazard.y - hazard.radius // 2 + 2), hazard.radius * 2 - 6, hazard.radius - 4), 1)
+            pygame.draw.circle(surface, (173, 117, 202), (int(hazard.x), int(hazard.y - 2)), 2)
         for orb in game.orbs:
             pygame.draw.rect(surface, (116, 246, 183), (int(orb.x) - 2, int(orb.y) - 2, 5, 5))
             surface.set_at((int(orb.x), int(orb.y) - 3), (218, 255, 219))
         for shot in game.projectiles:
-            pygame.draw.line(surface, (191, 216, 255), (int(shot.x), int(shot.y)),
-                             (int(shot.x - shot.vx * 0.055), int(shot.y - shot.vy * 0.055)), 2)
-            surface.set_at((int(shot.x), int(shot.y)), (255, 248, 200))
+            if shot.hostile:
+                if shot.kind == "feather":
+                    tail = (int(shot.x - shot.vx * 0.065), int(shot.y - shot.vy * 0.065))
+                    pygame.draw.line(surface, (82, 111, 151), tail, (int(shot.x), int(shot.y)), 3)
+                    pygame.draw.line(surface, (193, 223, 237), tail, (int(shot.x), int(shot.y)), 1)
+                else:
+                    pygame.draw.circle(surface, (136, 74, 175), (int(shot.x), int(shot.y)), 5)
+                    pygame.draw.circle(surface, (210, 170, 235), (int(shot.x) - 1, int(shot.y) - 1), 2)
+            elif shot.kind == "fire":
+                pygame.draw.circle(surface, (248, 103, 66), (int(shot.x), int(shot.y)), 4)
+                pygame.draw.rect(surface, (255, 224, 135), (int(shot.x) - 1, int(shot.y) - 2, 3, 3))
+            else:
+                pygame.draw.line(surface, (191, 216, 255), (int(shot.x), int(shot.y)),
+                                 (int(shot.x - shot.vx * 0.055), int(shot.y - shot.vy * 0.055)), 2)
+                surface.set_at((int(shot.x), int(shot.y)), (255, 248, 200))
         for x, y, radius, life in game.slashes:
-            col = (133, 215, 247) if radius > 30 else (249, 232, 174)
+            col = (255, 143, 79) if game.selected_character == "female" and radius > 20 else (133, 215, 247) if radius > 30 else (249, 232, 174)
             pygame.draw.circle(surface, col, (int(x), int(y)), int(radius * max(0.2, life / 0.22)), 1)
         for enemy in game.enemies:
             self.enemy(surface, enemy, game.time)
@@ -148,40 +180,67 @@ class Renderer:
         frames = self.player_art[character][player.facing]
         frame = int(time * 10) % len(frames) if player.moving else 0
         sprite = frames[frame]
-        pygame.draw.ellipse(surface, (10, 16, 26), (x - 12, y + 13, 24, 7))
+        pygame.draw.ellipse(surface, (10, 16, 26), (x - 15, y + 23, 30, 6))
         pygame.draw.circle(surface, (103, 166, 196), (x, y + 2), 17, 1)
-        surface.blit(sprite, sprite.get_rect(center=(x, y)))
+        bob = round(math.sin(time * (12 if player.moving else 2)) * (1 if player.moving else 0.5))
+        surface.blit(sprite, sprite.get_rect(center=(x, y + bob)))
 
     def enemy(self, surface: pygame.Surface, enemy, time: float) -> None:
         x, y, r = int(enemy.x), int(enemy.y), enemy.radius
         sprite = self.enemy_art[enemy.kind]
         bob = round(math.sin(time * 5 + x) * (1 if not enemy.elite else 2))
         pygame.draw.ellipse(surface, (9, 14, 23), (x - r - 3, y + r - 2, r * 2 + 6, 5))
+        rim = self.enemy_rims[enemy.kind]
+        rim_rect = rim.get_rect(center=(x, y + bob))
+        for offset in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            surface.blit(rim, rim_rect.move(*offset))
         surface.blit(sprite, sprite.get_rect(center=(x, y + bob)))
         if enemy.attack_flash > 0:
             pygame.draw.circle(surface, (255, 209, 147), (x, y), r + 3, 1)
         if enemy.elite:
             pygame.draw.rect(surface, (53, 25, 36), (x - 22, y - 34, 44, 5))
-            pygame.draw.rect(surface, (230, 78, 96), (x - 21, y - 33, max(1, int(42 * enemy.hp / 520)), 3))
-            self.text(surface, "秘境妖王", (x, y - 41), 8, (250, 193, 168), "midbottom")
+            pygame.draw.rect(surface, (230, 78, 96), (x - 21, y - 33, max(1, int(42 * enemy.hp / 760)), 3))
+            self.text(surface, "毒沼蛙君", (x, y - 49), 8, (213, 188, 240), "midbottom")
 
     def hud(self, surface: pygame.Surface, game: Game) -> None:
         p = game.player
-        pygame.draw.rect(surface, (13, 18, 30), (7, 7, 135, 34))
-        pygame.draw.rect(surface, (46, 51, 66), (10, 10, 68, 6))
-        pygame.draw.rect(surface, (204, 86, 105), (10, 10, int(68 * p.hp / p.max_hp), 6))
-        self.text(surface, f"气血 {int(p.hp)}/{int(p.max_hp)}", (10, 19), 9)
-        self.text(surface, f"修为  Lv.{p.level}", (84, 9), 10, (218, 207, 161))
-        self.text(surface, f"斩妖 {game.kills}", (84, 24), 9, (173, 200, 205))
+        # Compact, framed status panels leave the playfield readable.
+        pygame.draw.rect(surface, (11, 17, 29), (7, 7, 142, 39))
+        pygame.draw.rect(surface, (57, 73, 84), (7, 7, 142, 39), 1)
+        self.text(surface, "气血", (12, 11), 8, (192, 204, 207))
+        self.text(surface, f"{int(p.hp):03d}/{int(p.max_hp):03d}", (139, 10), 9, (239, 220, 211), "topright")
+        pygame.draw.rect(surface, (43, 49, 62), (12, 25, 130, 7))
+        ratio = max(0, min(1, p.hp / p.max_hp))
+        pygame.draw.rect(surface, (196, 75, 96), (13, 26, int(128 * ratio), 5))
+        pygame.draw.rect(surface, (235, 137, 146), (13, 26, int(128 * ratio), 1))
+        self.text(surface, f"修为 Lv.{p.level}", (12, 35), 8, (226, 207, 151))
+        self.text(surface, f"斩妖 {game.kills}", (139, 35), 8, (173, 200, 205), "topright")
         left = max(0, RUN_LENGTH - game.time)
-        self.text(surface, self.time_text(left), (WIDTH - 9, 9), 13, (226, 220, 185), "topright")
-        label = "精英现世" if game.elite_spawned else "秘境历练"
-        self.text(surface, label, (WIDTH - 9, 25), 9, (238, 153, 153) if game.elite_spawned else (148, 185, 182), "topright")
-        pygame.draw.rect(surface, (18, 25, 35), (7, HEIGHT - 9, WIDTH - 14, 4))
-        pygame.draw.rect(surface, (83, 193, 147), (7, HEIGHT - 9, int((WIDTH - 14) * min(1, p.xp / p.next_xp)), 4))
-        self.text(surface, "灵气", (8, HEIGHT - 22), 8, (151, 216, 182))
+        pygame.draw.rect(surface, (11, 17, 29), (WIDTH - 104, 7, 97, 39))
+        pygame.draw.rect(surface, (57, 73, 84), (WIDTH - 104, 7, 97, 39), 1)
+        label = "蛙君现世" if game.elite_spawned else "秘境历练"
+        self.text(surface, label, (WIDTH - 96, 11), 8,
+                  (238, 153, 153) if game.elite_spawned else (148, 185, 182))
+        self.text(surface, self.time_text(left), (WIDTH - 13, 20), 15, (239, 224, 180), "topright")
+        boss = next((enemy for enemy in game.enemies if enemy.elite), None)
+        if boss:
+            bx, by, bw = (WIDTH - 184) // 2, 52, 184
+            pygame.draw.rect(surface, (11, 16, 27), (bx, by, bw, 20))
+            pygame.draw.rect(surface, (116, 76, 100), (bx, by, bw, 20), 1)
+            self.text(surface, "秘境首领 · 毒沼蛙君", (bx + 5, by + 3), 8, (229, 190, 203))
+            hp = max(0, min(1, boss.hp / 760))
+            pygame.draw.rect(surface, (45, 31, 43), (bx + 5, by + 14, bw - 10, 3))
+            pygame.draw.rect(surface, (216, 77, 103), (bx + 5, by + 14, int((bw - 10) * hp), 3))
+        pygame.draw.rect(surface, (11, 17, 28), (0, HEIGHT - 14, WIDTH, 14))
+        pygame.draw.rect(surface, (42, 58, 58), (7, HEIGHT - 7, WIDTH - 14, 3))
+        xp_width = int((WIDTH - 14) * min(1, p.xp / p.next_xp))
+        pygame.draw.rect(surface, (83, 193, 147), (7, HEIGHT - 7, xp_width, 3))
+        if xp_width > 0:
+            pygame.draw.rect(surface, (173, 239, 185), (7, HEIGHT - 7, xp_width, 1))
+        self.text(surface, f"灵气 {int(p.xp)}/{int(p.next_xp)}", (8, HEIGHT - 13), 7, (151, 216, 182), "bottomleft")
         if game.time < 14:
-            self.text(surface, "WASD 移动  ·  灵剑自动御敌  ·  P 暂停", (WIDTH // 2, 49), 9, (206, 218, 209), "midtop")
+            attack_hint = "火球爆燃  ·  范围伤害" if game.selected_character == "female" else "灵剑追击  ·  高速单体"
+            self.text(surface, f"WASD 移动  ·  {attack_hint}  ·  P 暂停", (WIDTH // 2, 49), 9, (206, 218, 209), "midtop")
 
     def veil(self, surface: pygame.Surface) -> None:
         shade = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
@@ -191,26 +250,30 @@ class Renderer:
     def panel(self, surface: pygame.Surface, title: str, subtitle: str, info: str,
               button: str, accent: tuple[int, int, int]) -> None:
         self.veil(surface)
-        pygame.draw.rect(surface, (29, 38, 53), (90, 64, 300, 150))
-        pygame.draw.rect(surface, accent, (90, 64, 300, 2))
-        self.text(surface, title, (WIDTH // 2, 89), 23, accent, "midtop")
-        self.text(surface, subtitle, (WIDTH // 2, 124), 10, (206, 214, 222), "midtop")
-        self.text(surface, info, (WIDTH // 2, 141), 9, (165, 178, 190), "midtop")
-        self.button(surface, button, 164, 166, 152, 29, accent)
-        self.text(surface, "Enter 开始 / 继续", (WIDTH // 2, 202), 8, (136, 150, 163), "midtop")
+        pygame.draw.rect(surface, (19, 27, 41), (84, 56, 312, 162))
+        pygame.draw.rect(surface, (73, 85, 96), (84, 56, 312, 162), 1)
+        pygame.draw.rect(surface, accent, (85, 57, 310, 2))
+        self.text(surface, "✦", (WIDTH // 2, 69), 12, accent, "midtop")
+        self.text(surface, title, (WIDTH // 2, 84), 23, accent, "midtop")
+        self.text(surface, subtitle, (WIDTH // 2, 119), 10, (206, 214, 222), "midtop")
+        self.text(surface, info, (WIDTH // 2, 139), 9, (165, 178, 190), "midtop")
+        self.button(surface, button, 164, 165, 152, 30, accent)
+        self.text(surface, "Enter 确认", (WIDTH // 2, 201), 8, (136, 150, 163), "midtop")
 
     def button(self, surface: pygame.Surface, label: str, x: int, y: int,
                w: int, h: int, color: tuple[int, int, int]) -> None:
-        pygame.draw.rect(surface, (46, 54, 69), (x, y, w, h))
+        pygame.draw.rect(surface, (19, 27, 40), (x, y, w, h))
+        pygame.draw.rect(surface, (46, 58, 71), (x + 2, y + 2, w - 4, h - 4))
         pygame.draw.rect(surface, color, (x, y, w, h), 1)
         self.text(surface, label, (x + w // 2, y + h // 2), 11, color, "center")
 
     def menu(self, surface: pygame.Surface, game: Game) -> None:
         self.veil(surface)
-        pygame.draw.rect(surface, (27, 36, 51), (48, 14, 384, 242))
-        pygame.draw.rect(surface, (180, 164, 119), (48, 14, 384, 2))
-        self.text(surface, "仙 途", (WIDTH // 2, 23), 27, (233, 218, 171), "midtop")
-        self.text(surface, "选择你的修行者", (WIDTH // 2, 58), 10, (168, 201, 193), "midtop")
+        pygame.draw.rect(surface, (12, 20, 32), (36, 10, 408, 250))
+        pygame.draw.rect(surface, (74, 91, 99), (36, 10, 408, 250), 1)
+        pygame.draw.rect(surface, (180, 164, 119), (37, 11, 406, 2))
+        self.text(surface, "秘 境 求 生", (WIDTH // 2, 18), 23, (233, 218, 171), "midtop")
+        self.text(surface, "择一位修行者，开启你的仙途", (WIDTH // 2, 49), 9, (168, 201, 193), "midtop")
 
         choices = [
             ("male", "云归", "男修"),
@@ -220,15 +283,20 @@ class Renderer:
             x = 92 + i * 160
             selected = key == game.selected_character
             border = (235, 210, 148) if selected else (79, 93, 105)
-            pygame.draw.rect(surface, (37, 48, 64), (x, 83, 136, 96))
-            pygame.draw.rect(surface, border, (x, 83, 136, 96), 2 if selected else 1)
+            pygame.draw.rect(surface, (24, 35, 51), (x, 73, 136, 108))
+            pygame.draw.rect(surface, border, (x, 73, 136, 108), 2 if selected else 1)
+            if selected:
+                pygame.draw.rect(surface, (65, 67, 60), (x + 5, 78, 126, 98), 1)
             sprite = self.player_art[key]["down"][0]
-            surface.blit(sprite, sprite.get_rect(center=(x + 68, 124)))
-            self.text(surface, f"{name}  ·  {subtitle}", (x + 68, 163), 9,
+            surface.blit(sprite, sprite.get_rect(center=(x + 68, 116)))
+            self.text(surface, f"{name}  ·  {subtitle}", (x + 68, 151), 9,
                       (240, 220, 173) if selected else (182, 195, 199), "midtop")
+            attack = "灵剑：高速单体" if key == "male" else "火球：爆燃范围"
+            self.text(surface, attack, (x + 68, 165), 7,
+                      (157, 204, 224) if key == "male" else (246, 169, 119), "midtop")
 
         self.button(surface, "踏入秘境", 166, 190, 148, 30, (230, 207, 145))
-        self.text(surface, "点击角色选择 · ← → 切换 · Enter 开始", (WIDTH // 2, 226), 8,
+        self.text(surface, "点击角色选择 · ← → 切换 · Enter 开始", (WIDTH // 2, 225), 8,
                   (148, 165, 172), "midtop")
         self.text(surface, "WASD 移动 · 自动施法 · 八分钟后迎战妖王", (WIDTH // 2, 240), 8,
                   (134, 151, 164), "midtop")
@@ -240,13 +308,17 @@ class Renderer:
         accents = [(133, 199, 222), (215, 174, 119), (179, 158, 215)]
         for i, key in enumerate(game.upgrades):
             x = 42 + i * 136
-            pygame.draw.rect(surface, (28, 38, 53), (x, 91, 128, 126))
-            pygame.draw.rect(surface, accents[i], (x, 91, 128, 2))
-            self.text(surface, f"0{i + 1}", (x + 12, 101), 9, accents[i])
-            self.text(surface, UPGRADES[key][0], (x + 64, 126), 13, (232, 229, 213), "midtop")
-            desc = UPGRADES[key][1]
-            self.text(surface, desc[:8], (x + 64, 153), 9, (165, 181, 188), "midtop")
-            if len(desc) > 8:
-                self.text(surface, desc[8:], (x + 64, 166), 9, (165, 181, 188), "midtop")
-            self.text(surface, f"按 {i + 1} 选择", (x + 64, 194), 9, accents[i], "midtop")
+            pygame.draw.rect(surface, (15, 23, 37), (x, 88, 128, 132))
+            pygame.draw.rect(surface, (72, 82, 94), (x, 88, 128, 132), 1)
+            pygame.draw.rect(surface, accents[i], (x + 1, 89, 126, 2))
+            self.text(surface, f"{i + 1}  ·  功法", (x + 10, 100), 8, accents[i])
+            title, desc = EVOLUTIONS[key] if key in EVOLUTIONS else UPGRADES[key][0], EVOLUTIONS[key][1] if key in EVOLUTIONS else UPGRADES[key][1]
+            if key == "sword":
+                title = "控火诀" if game.selected_character == "female" else "御剑术"
+                desc = "火球伤害提高" if game.selected_character == "female" else "灵剑伤害提高"
+            self.text(surface, title, (x + 64, 128), 12, (232, 229, 213), "midtop")
+            self.text(surface, desc[:9], (x + 64, 155), 8, (165, 181, 188), "midtop")
+            if len(desc) > 9:
+                self.text(surface, desc[9:18], (x + 64, 167), 8, (165, 181, 188), "midtop")
+            self.button(surface, f"按 {i + 1} 选择", x + 16, 190, 96, 22, accents[i])
         self.text(surface, "点击卡牌或按数字键", (WIDTH // 2, 235), 8, (139, 154, 164), "midtop")

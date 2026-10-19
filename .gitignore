@@ -1,6 +1,7 @@
 .venv/
 venv/
 __pycache__/
+tmp/imagegen/
 *.py[cod]
 .pytest_cache/
 .idea/
