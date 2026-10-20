@@ -43,9 +43,9 @@ class Renderer:
             image = pygame.transform.scale(image, size)
             self.enemy_art[kind] = image
             rim_color = {
-                "raven": (72, 157, 188, 150),
-                "wolf": (210, 133, 86, 145),
-                "toad_boss": (169, 103, 203, 170),
+                "raven": (255, 50, 72, 235),
+                "wolf": (255, 82, 45, 235),
+                "toad_boss": (255, 28, 82, 245),
             }[kind]
             self.enemy_rims[kind] = pygame.mask.from_surface(image).to_surface(
                 setcolor=rim_color, unsetcolor=(0, 0, 0, 0))
@@ -137,9 +137,9 @@ class Renderer:
     def world(self, surface: pygame.Surface, game: Game) -> None:
         for hazard in game.hazards:
             pulse = int(2 * math.sin(game.time * 5))
-            pygame.draw.ellipse(surface, (54, 33, 77), (int(hazard.x - hazard.radius), int(hazard.y - hazard.radius // 2), hazard.radius * 2, hazard.radius))
-            pygame.draw.ellipse(surface, (113 + pulse, 68, 141), (int(hazard.x - hazard.radius + 3), int(hazard.y - hazard.radius // 2 + 2), hazard.radius * 2 - 6, hazard.radius - 4), 1)
-            pygame.draw.circle(surface, (173, 117, 202), (int(hazard.x), int(hazard.y - 2)), 2)
+            pygame.draw.ellipse(surface, (72, 22, 39), (int(hazard.x - hazard.radius), int(hazard.y - hazard.radius // 2), hazard.radius * 2, hazard.radius))
+            pygame.draw.ellipse(surface, (235, 48 + pulse, 72), (int(hazard.x - hazard.radius + 3), int(hazard.y - hazard.radius // 2 + 2), hazard.radius * 2 - 6, hazard.radius - 4), 1)
+            pygame.draw.circle(surface, (255, 117, 117), (int(hazard.x), int(hazard.y - 2)), 2)
         for orb in game.orbs:
             pygame.draw.rect(surface, (116, 246, 183), (int(orb.x) - 2, int(orb.y) - 2, 5, 5))
             surface.set_at((int(orb.x), int(orb.y) - 3), (218, 255, 219))
@@ -147,11 +147,13 @@ class Renderer:
             if shot.hostile:
                 if shot.kind == "feather":
                     tail = (int(shot.x - shot.vx * 0.065), int(shot.y - shot.vy * 0.065))
-                    pygame.draw.line(surface, (82, 111, 151), tail, (int(shot.x), int(shot.y)), 3)
-                    pygame.draw.line(surface, (193, 223, 237), tail, (int(shot.x), int(shot.y)), 1)
+                    pygame.draw.line(surface, (139, 27, 51), tail, (int(shot.x), int(shot.y)), 3)
+                    pygame.draw.line(surface, (255, 77, 94), tail, (int(shot.x), int(shot.y)), 1)
+                    surface.set_at((int(shot.x), int(shot.y)), (255, 220, 206))
                 else:
-                    pygame.draw.circle(surface, (136, 74, 175), (int(shot.x), int(shot.y)), 5)
-                    pygame.draw.circle(surface, (210, 170, 235), (int(shot.x) - 1, int(shot.y) - 1), 2)
+                    pygame.draw.circle(surface, (193, 29, 66), (int(shot.x), int(shot.y)), 6)
+                    pygame.draw.circle(surface, (255, 89, 110), (int(shot.x), int(shot.y)), 4)
+                    pygame.draw.circle(surface, (255, 222, 214), (int(shot.x) - 1, int(shot.y) - 1), 2)
             elif shot.kind == "fire":
                 pygame.draw.circle(surface, (248, 103, 66), (int(shot.x), int(shot.y)), 4)
                 pygame.draw.rect(surface, (255, 224, 135), (int(shot.x) - 1, int(shot.y) - 2, 3, 3))
@@ -190,17 +192,20 @@ class Renderer:
         sprite = self.enemy_art[enemy.kind]
         bob = round(math.sin(time * 5 + x) * (1 if not enemy.elite else 2))
         pygame.draw.ellipse(surface, (9, 14, 23), (x - r - 3, y + r - 2, r * 2 + 6, 5))
+        if enemy.elite and enemy.attack_cooldown < 0.28:
+            pulse = int(1 + 2 * abs(math.sin(time * 15)))
+            pygame.draw.circle(surface, (255, 42, 69), (x, y), r + 6 + pulse, 2)
         rim = self.enemy_rims[enemy.kind]
         rim_rect = rim.get_rect(center=(x, y + bob))
         for offset in ((-1, 0), (1, 0), (0, -1), (0, 1)):
             surface.blit(rim, rim_rect.move(*offset))
         surface.blit(sprite, sprite.get_rect(center=(x, y + bob)))
         if enemy.attack_flash > 0:
-            pygame.draw.circle(surface, (255, 209, 147), (x, y), r + 3, 1)
+            pygame.draw.circle(surface, (255, 57, 78), (x, y), r + 4, 2)
         if enemy.elite:
             pygame.draw.rect(surface, (53, 25, 36), (x - 22, y - 34, 44, 5))
             pygame.draw.rect(surface, (230, 78, 96), (x - 21, y - 33, max(1, int(42 * enemy.hp / 760)), 3))
-            self.text(surface, "毒沼蛙君", (x, y - 49), 8, (213, 188, 240), "midbottom")
+            self.text(surface, "毒沼蛙君", (x, y - 49), 8, (255, 116, 133), "midbottom")
 
     def hud(self, surface: pygame.Surface, game: Game) -> None:
         p = game.player
