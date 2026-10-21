@@ -1,4 +1,4 @@
-"""Game state and simulation for 仙途：秘境求生."""
+"""Game state and simulation for 修仙幸存者."""
 
 from __future__ import annotations
 
@@ -8,8 +8,16 @@ from dataclasses import dataclass
 
 import pygame
 
+from layout import CHARACTER_CARDS, PANEL_BUTTON, START_BUTTON, UPGRADE_CARDS
+
 WIDTH, HEIGHT = 480, 270
 RUN_LENGTH = 8 * 60
+BOSS_HP = 500
+HAZARD_TICK = 0.65
+POISON_DAMAGE = 7
+FIRE_ZONE_DAMAGE = 10
+PLAYER_MARGIN_X = 26
+PLAYER_MARGIN_Y = 30
 
 
 @dataclass
@@ -55,6 +63,11 @@ class Enemy:
     elite: bool = False
     attack_flash: float = 0
     attack_cooldown: float = 0
+    max_hp: float = 0
+
+    def __post_init__(self) -> None:
+        if self.max_hp <= 0:
+            self.max_hp = self.hp
 
 
 @dataclass
@@ -64,6 +77,12 @@ class Hazard:
     radius: int
     life: float
     tick: float = 0
+    hostile: bool = True
+
+    def contains(self, x: float, y: float) -> bool:
+        dx = (x - self.x) / max(1, self.radius - 2)
+        dy = (y - self.y) / max(1, self.radius / 2 - 2)
+        return dx * dx + dy * dy < 1
 
 
 @dataclass
@@ -108,7 +127,6 @@ EVOLUTIONS = {
 class Game:
     def __init__(self) -> None:
         self.selected_character = "male"
-        self.state = "menu"
         self.reset()
         self.state = "menu"
 
@@ -152,26 +170,27 @@ class Game:
             if key in (pygame.K_1, pygame.K_2, pygame.K_3):
                 self.choose_upgrade(key - pygame.K_1)
             return
-        if key in (pygame.K_p, pygame.K_ESCAPE):
-            self.state = "paused" if self.state == "playing" else "playing" if self.state == "paused" else self.state
+        if self.state == "playing" and key in (pygame.K_p, pygame.K_ESCAPE):
+            self.state = "paused"
+        elif self.state == "paused" and key in (pygame.K_p, pygame.K_ESCAPE, pygame.K_RETURN, pygame.K_SPACE):
+            self.state = "playing"
 
     def on_click(self, point: tuple[float, float]) -> None:
-        x, y = point
         if self.state == "menu":
-            if 73 <= y <= 181 and 92 <= x <= 228:
+            if CHARACTER_CARDS["male"].collidepoint(point):
                 self.selected_character = "male"
-            elif 73 <= y <= 181 and 252 <= x <= 388:
+            elif CHARACTER_CARDS["female"].collidepoint(point):
                 self.selected_character = "female"
-            elif 160 <= x <= 320 and 190 <= y <= 225:
+            elif START_BUTTON.collidepoint(point):
                 self.start()
-        elif self.state in ("won", "lost") and 164 <= x <= 316 and 165 <= y <= 195:
+        elif self.state in ("won", "lost") and PANEL_BUTTON.collidepoint(point):
             self.start()
         elif self.state == "upgrade":
-            for i in range(3):
-                if 42 + i * 136 <= x <= 170 + i * 136 and 88 <= y <= 220:
-                    self.choose_upgrade(i)
+            for index, card in enumerate(UPGRADE_CARDS):
+                if index < len(self.upgrades) and card.collidepoint(point):
+                    self.choose_upgrade(index)
                     break
-        elif self.state == "paused" and 164 <= x <= 316 and 165 <= y <= 195:
+        elif self.state == "paused" and PANEL_BUTTON.collidepoint(point):
             self.state = "playing"
 
     def choose_upgrade(self, index: int) -> None:
@@ -233,8 +252,8 @@ class Game:
                     if self._point_segment_distance(enemy.x, enemy.y, p.x-dx/length*24, p.y-dy/length*24, p.x, p.y) < enemy.radius+7:
                         self.damage_enemy(enemy, 20)
                 p.dash_cooldown = 0.32
-        p.x = max(10, min(WIDTH - 10, p.x))
-        p.y = max(18, min(HEIGHT - 10, p.y))
+        p.x = max(PLAYER_MARGIN_X, min(WIDTH - PLAYER_MARGIN_X, p.x))
+        p.y = max(PLAYER_MARGIN_Y, min(HEIGHT - PLAYER_MARGIN_Y, p.y))
         p.invulnerable = max(0, p.invulnerable - dt)
         p.dash_cooldown = max(0, p.dash_cooldown - dt)
         self.shake = max(0, self.shake - dt * 16)
@@ -303,7 +322,7 @@ class Game:
                         if math.hypot(enemy.x - hit.x, enemy.y - hit.y) <= blast_radius + enemy.radius:
                             self.damage_enemy(enemy, shot.damage * (1.3 if p.fire_evolution else 1))
                     if p.fire_evolution:
-                        self.hazards.append(Hazard(hit.x, hit.y, 25, 2.8))
+                        self.hazards.append(Hazard(hit.x, hit.y, 25, 2.8, hostile=False))
                     self.slashes.append((hit.x, hit.y, blast_radius, 0.2))
                 else:
                     if p.sword_evolution:
@@ -372,11 +391,20 @@ class Game:
             hazard.tick -= dt
             if hazard.life <= 0:
                 self.hazards.remove(hazard)
-            elif math.hypot(p.x - hazard.x, p.y - hazard.y) < hazard.radius - 2 and hazard.tick <= 0 and p.invulnerable <= 0:
-                self.hit_player(7)
-                hazard.tick = 0.65
-                if self.state == "lost":
-                    return
+            elif hazard.tick <= 0:
+                if hazard.hostile:
+                    if hazard.contains(p.x, p.y) and p.invulnerable <= 0:
+                        self.hit_player(POISON_DAMAGE)
+                        hazard.tick = HAZARD_TICK
+                        if self.state == "lost":
+                            return
+                else:
+                    for enemy in self.enemies[:]:
+                        if hazard.contains(enemy.x, enemy.y):
+                            self.damage_enemy(enemy, FIRE_ZONE_DAMAGE)
+                    hazard.tick = HAZARD_TICK
+                    if self.state != "playing":
+                        return
         for orb in self.orbs[:]:
             vx, vy = p.x - orb.x, p.y - orb.y
             dist = max(1, math.hypot(vx, vy))
@@ -410,16 +438,16 @@ class Game:
         x = random.randrange(WIDTH) if side in (0, 2) else (-8 if side == 3 else WIDTH + 8)
         y = (-8 if side == 0 else HEIGHT + 8) if side in (0, 2) else random.randrange(HEIGHT)
         if elite:
-            self.enemies.append(Enemy(x, y, "toad_boss", 760, 13, 18, 19, (119, 152, 112), True,
+            self.enemies.append(Enemy(x, y, "toad_boss", BOSS_HP, 13, 18, 19, (119, 152, 112), True,
                                       attack_cooldown=1.4))
             return
         roll = random.random()
         raven_chance = 0.78 if self.time < RUN_LENGTH / 3 else 0.22 if self.time < RUN_LENGTH * 2 / 3 else 0.5
         if roll < raven_chance:
-            self.enemies.append(Enemy(x, y, "raven", 22 + self.time * 0.022, 37 + min(20, self.time / 23), 10, 8,
+            self.enemies.append(Enemy(x, y, "raven", 14 + self.time * 0.014, 37 + min(20, self.time / 23), 10, 8,
                                       (102, 116, 141), attack_cooldown=random.uniform(0.6, 2.0)))
         else:
-            self.enemies.append(Enemy(x, y, "wolf", 39 + self.time * 0.032, 23 + min(10, self.time / 35), 14, 10,
+            self.enemies.append(Enemy(x, y, "wolf", 25 + self.time * 0.021, 23 + min(10, self.time / 35), 14, 10,
                                       (154, 112, 86), attack_cooldown=random.uniform(0.8, 2.2)))
 
     def nearest_enemy(self, max_dist: float = 9999) -> Enemy | None:
@@ -441,10 +469,12 @@ class Game:
                 self.elite_defeated = True
                 self.state = "won"
             else:
-                value = 5 if enemy.elite else 2 if enemy.kind == "wolf" else 1
+                value = 2 if enemy.kind == "wolf" else 1
                 self.orbs.append(Orb(enemy.x, enemy.y, value))
 
     def hit_player(self, damage: float) -> None:
+        if self.state != "playing":
+            return
         p = self.player
         reduction = min(0.72 if p.guard_evolution else 0.65, p.guard_level * (0.14 if p.guard_evolution else 0.1))
         p.hp -= damage * (1 - reduction)
@@ -461,7 +491,7 @@ class Game:
     def make_upgrade_choices(self) -> list[str]:
         keys = list(UPGRADES)
         p = self.player
-        if p.sword_level >= 5 and not p.sword_evolution:
+        if p.sword_level >= 5 and not (p.sword_evolution or p.fire_evolution):
             keys.append("sword_evo" if self.selected_character == "male" else "fire_evo")
         if p.thunder_level >= 4 and not p.thunder_evolution:
             keys.append("thunder_evo")
