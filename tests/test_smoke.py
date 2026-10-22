@@ -14,8 +14,6 @@ from game import (
     BOSS_HP,
     FIRE_ZONE_DAMAGE,
     HEIGHT,
-    PLAYER_MARGIN_X,
-    PLAYER_MARGIN_Y,
     RUN_LENGTH,
     EVOLUTIONS,
     UPGRADES,
@@ -93,22 +91,27 @@ class SmokeTests(unittest.TestCase):
         self.assertFalse(hazard.contains(100, 111))
         self.assertFalse(hazard.contains(120, 100))
 
-    def test_player_stays_inside_playfield(self) -> None:
+    def test_player_moves_freely_on_infinite_map(self) -> None:
         game = Game()
         game.start()
         game.spawn_timer = 999
         game.enemies = []
-        up_left = FakeKeys(pygame.K_a, pygame.K_w)
+        right = FakeKeys(pygame.K_d)
         for _ in range(600):
-            game.update(1 / 60, up_left)
-        self.assertGreaterEqual(game.player.x, PLAYER_MARGIN_X)
-        self.assertGreaterEqual(game.player.y, PLAYER_MARGIN_Y)
+            game.update(1 / 60, right)
+        self.assertGreater(game.player.x, WIDTH)
 
-        down_right = FakeKeys(pygame.K_d, pygame.K_s)
+        up = FakeKeys(pygame.K_w)
         for _ in range(1200):
-            game.update(1 / 60, down_right)
-        self.assertLessEqual(game.player.x, WIDTH - PLAYER_MARGIN_X)
-        self.assertLessEqual(game.player.y, HEIGHT - PLAYER_MARGIN_Y)
+            game.update(1 / 60, up)
+        self.assertLess(game.player.y, 0)
+
+    def test_world_renders_far_from_origin(self) -> None:
+        game = Game()
+        game.start()
+        game.player.x, game.player.y = 10000, -5000
+        game.enemies = [Enemy(10040, -5000, "wolf", 50, 0, 10, 10, (0, 0, 0))]
+        self.renderer.draw(self.surface(), game)
 
     def test_pause_enter_resumes(self) -> None:
         game = Game()
@@ -168,6 +171,39 @@ class SmokeTests(unittest.TestCase):
         game.player.sword_evolution = True
         for _ in range(100):
             self.assertNotIn("sword_evo", game.make_upgrade_choices())
+
+    def test_chain_lightning_is_second_attack(self) -> None:
+        game = Game()
+        game.start()
+        game.spawn_timer = 999
+        game.player.cooldown = 999
+        game.player.chain_level = 1
+        game.player.x, game.player.y = 240, 135
+        first = Enemy(200, 135, "wolf", 100, 0, 0, 10, (0, 0, 0))
+        second = Enemy(170, 135, "wolf", 100, 0, 0, 10, (0, 0, 0))
+        game.enemies = [first, second]
+        game.update(1 / 60, FakeKeys())
+        self.assertLess(first.hp, 100)
+        self.assertLess(second.hp, 100)
+        self.assertTrue(game.bolts)
+
+    def test_raven_does_not_fire_projectiles(self) -> None:
+        game = Game()
+        game.start()
+        game.spawn_timer = 999
+        game.player.cooldown = 999
+        game.player.x, game.player.y = 240, 135
+        game.enemies = [Enemy(100, 135, "raven", 50, 40, 10, 8, (0, 0, 0))]
+        for _ in range(120):
+            game.update(1 / 60, FakeKeys())
+        self.assertFalse(any(shot.hostile for shot in game.projectiles))
+
+    def test_high_res_text_overlay(self) -> None:
+        game = Game()
+        target = pygame.Surface((1280, 720))
+        self.renderer.begin_text_layer()
+        self.renderer.draw(pygame.Surface((WIDTH, HEIGHT)), game)
+        self.renderer.flush_text(target, (0, 0), 1280 / WIDTH)
 
 
 if __name__ == "__main__":

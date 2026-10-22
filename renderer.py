@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import random
 from pathlib import Path
 import pygame
 
@@ -24,6 +25,13 @@ FONT_CANDIDATES = (
     "notosanscjksc",
 )
 
+GROUND_PALETTES = {
+    "raven_realm": ((28, 36, 45), (22, 29, 37), (40, 50, 59), (58, 86, 88)),
+    "wolf_realm": ((62, 50, 36), (50, 40, 29), (78, 63, 44), (102, 92, 58)),
+    "toad_realm": ((32, 28, 43), (24, 21, 33), (45, 38, 58), (82, 62, 112)),
+}
+DECOR_CELL = 150
+
 
 class Renderer:
     def __init__(self) -> None:
@@ -32,7 +40,9 @@ class Renderer:
         self.enemy_art: dict[str, pygame.Surface] = {}
         self.enemy_rims: dict[str, pygame.Surface] = {}
         self.background_art: dict[str, pygame.Surface] = {}
+        self.ground_tiles: dict[str, pygame.Surface] = {}
         self.hit_overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        self.text_queue: list[tuple[str, tuple[float, float], int, tuple[int, int, int], str]] | None = None
         self.load_art()
 
     def load_art(self) -> None:
@@ -70,6 +80,117 @@ class Renderer:
         for key in ("raven_realm", "wolf_realm", "toad_realm"):
             image = pygame.image.load(str(background_dir / f"{key}.png")).convert()
             self.background_art[key] = pygame.transform.scale(image, (WIDTH, HEIGHT))
+        self.ground_tiles = {
+            key: self._make_ground_tile(key) for key in ("raven_realm", "wolf_realm", "toad_realm")
+        }
+
+    @staticmethod
+    def _make_ground_tile(key: str) -> pygame.Surface:
+        base, dark, light, accent = GROUND_PALETTES[key]
+        rng = random.Random(key + "-ground")
+        size = 192
+        tile = pygame.Surface((size, size))
+        tile.fill(base)
+
+        def wrapped_polygon(color: tuple[int, int, int], points: list[tuple[float, float]]) -> None:
+            for dx in (-size, 0, size):
+                for dy in (-size, 0, size):
+                    pygame.draw.polygon(tile, color, [(x + dx, y + dy) for x, y in points])
+
+        def wrapped_ellipse(color: tuple[int, int, int], x: int, y: int, w: int, h: int) -> None:
+            for dx in (-size, 0, size):
+                for dy in (-size, 0, size):
+                    pygame.draw.ellipse(tile, color, (x + dx, y + dy, w, h))
+
+        def wrapped_line(color: tuple[int, int, int], x1: int, y1: int, x2: int, y2: int) -> None:
+            for dx in (-size, 0, size):
+                for dy in (-size, 0, size):
+                    pygame.draw.line(tile, color, (x1 + dx, y1 + dy), (x2 + dx, y2 + dy), 1)
+
+        for _ in range(16):
+            cx, cy = rng.randrange(size), rng.randrange(size)
+            radius = rng.randint(8, 24)
+            points = []
+            for step in range(7):
+                angle = math.tau * step / 7
+                distance = radius * rng.uniform(0.6, 1.0)
+                points.append((cx + math.cos(angle) * distance, cy + math.sin(angle) * distance))
+            wrapped_polygon(dark if rng.random() < 0.55 else light, points)
+        for _ in range(40):
+            x, y = rng.randrange(size), rng.randrange(size)
+            wrapped_ellipse(light if rng.random() < 0.5 else dark, x, y, rng.randint(2, 7), rng.randint(2, 4))
+        for _ in range(40):
+            x, y = rng.randrange(size), rng.randrange(size)
+            wrapped_line(dark, x, y, x + rng.randint(-14, 14), y + rng.randint(-8, 8))
+        for _ in range(220):
+            x, y = rng.randrange(size), rng.randrange(size)
+            tile.set_at((x, y), accent if rng.random() < 0.25 else light)
+
+        if key == "wolf_realm":
+            for _ in range(14):
+                x, y = rng.randrange(size), rng.randrange(size)
+                for offset in (-2, 0, 2):
+                    wrapped_line(accent, x + offset, y, x + offset + rng.randint(-2, 2), y - rng.randint(3, 6))
+        elif key == "toad_realm":
+            for _ in range(10):
+                x, y = rng.randrange(size), rng.randrange(size)
+                wrapped_polygon(accent, [(x, y - 4), (x + 3, y), (x, y + 4), (x - 3, y)])
+        else:
+            for _ in range(10):
+                x, y = rng.randrange(size), rng.randrange(size)
+                wrapped_line(accent, x - 3, y, x + 3, y)
+        return tile
+
+    def _draw_decorations(self, surface: pygame.Surface, game: Game,
+                          camera_x: float, camera_y: float) -> None:
+        key = "raven_realm" if game.time < RUN_LENGTH / 3 else "wolf_realm" if game.time < RUN_LENGTH else "toad_realm"
+        start_x = math.floor((camera_x - 24) / DECOR_CELL)
+        end_x = math.floor((camera_x + WIDTH + 24) / DECOR_CELL)
+        start_y = math.floor((camera_y - 24) / DECOR_CELL)
+        end_y = math.floor((camera_y + HEIGHT + 24) / DECOR_CELL)
+        for gx in range(start_x, end_x + 1):
+            for gy in range(start_y, end_y + 1):
+                rng = random.Random(f"{key}:{gx}:{gy}")
+                if rng.random() > 0.4:
+                    continue
+                wx = gx * DECOR_CELL + rng.uniform(12, DECOR_CELL - 12)
+                wy = gy * DECOR_CELL + rng.uniform(12, DECOR_CELL - 12)
+                sx = int(wx - camera_x)
+                sy = int(wy - camera_y)
+                if -24 <= sx <= WIDTH + 24 and -24 <= sy <= HEIGHT + 24:
+                    self._draw_decor(surface, key, sx, sy, rng)
+
+    @staticmethod
+    def _draw_decor(surface: pygame.Surface, key: str, x: int, y: int,
+                    rng: random.Random) -> None:
+        if key == "wolf_realm":
+            if rng.random() < 0.55:
+                for _ in range(rng.randint(4, 7)):
+                    dx = rng.randint(-6, 6)
+                    pygame.draw.line(surface, (102, 92, 58), (x + dx, y),
+                                     (x + dx + rng.randint(-2, 2), y - rng.randint(4, 9)), 1)
+            else:
+                pygame.draw.ellipse(surface, (48, 39, 28), (x - 6, y - 3, 12, 8))
+                pygame.draw.ellipse(surface, (76, 62, 43), (x - 5, y - 3, 10, 5))
+        elif key == "toad_realm":
+            if rng.random() < 0.55:
+                height = rng.randint(6, 11)
+                pygame.draw.polygon(surface, (80, 62, 112),
+                                    [(x, y - height), (x + 4, y), (x, y + 4), (x - 4, y)])
+                pygame.draw.line(surface, (130, 100, 160), (x, y - height), (x, y), 1)
+            else:
+                for _ in range(4):
+                    pygame.draw.circle(surface, (90, 70, 120),
+                                       (x + rng.randint(-4, 4), y + rng.randint(-3, 3)), 1)
+        else:
+            if rng.random() < 0.5:
+                for _ in range(rng.randint(3, 4)):
+                    dx, dy = rng.randint(-5, 5), rng.randint(-3, 3)
+                    pygame.draw.circle(surface, (55, 66, 76), (x + dx, y + dy), rng.randint(2, 5))
+                    pygame.draw.circle(surface, (80, 96, 104), (x + dx - 1, y + dy - 1), 1)
+            else:
+                pygame.draw.circle(surface, (58, 86, 88), (x, y), 6, 1)
+                pygame.draw.line(surface, (58, 86, 88), (x - 4, y), (x + 4, y), 1)
 
     def font(self, size: int) -> pygame.font.Font:
         if size not in self.fonts:
@@ -82,12 +203,34 @@ class Renderer:
 
     def text(self, surface: pygame.Surface, value: str, pos: tuple[int, int], size: int = 12,
              color: tuple[int, int, int] = (230, 234, 244), anchor: str = "topleft") -> None:
+        if self.text_queue is not None:
+            self.text_queue.append((value, (float(pos[0]), float(pos[1])), size, color, anchor))
+            return
         image = self.font(size).render(value, True, color)
         rect = image.get_rect(**{anchor: pos})
         surface.blit(image, rect)
 
+    def begin_text_layer(self) -> None:
+        """Collect text so it can be rendered at window resolution after scaling."""
+        self.text_queue = []
+
+    def flush_text(self, target: pygame.Surface, origin: tuple[int, int], scale: float) -> None:
+        """Render the collected text crisply at the window's pixel size."""
+        if self.text_queue is None:
+            return
+        queue = self.text_queue
+        self.text_queue = None
+        for value, pos, size, color, anchor in queue:
+            image = self.font(max(1, round(size * scale))).render(value, True, color)
+            rect = image.get_rect(
+                **{anchor: (round(origin[0] + pos[0] * scale), round(origin[1] + pos[1] * scale))}
+            )
+            target.blit(image, rect)
+
     def draw(self, surface: pygame.Surface, game: Game) -> None:
-        self.background(surface, game.time)
+        camera_x = game.player.x - WIDTH / 2
+        camera_y = game.player.y - HEIGHT / 2
+        self.background(surface, game.time, camera_x, camera_y, scenic=game.state == "menu")
         if game.state == "menu":
             self.menu(surface, game)
             return
@@ -110,22 +253,22 @@ class Renderer:
     def time_text(seconds: float) -> str:
         return f"{int(seconds) // 60:02d}:{int(seconds) % 60:02d}"
 
-    def background(self, surface: pygame.Surface, t: float) -> None:
-        if self.background_art:
-            key = "raven_realm" if t < RUN_LENGTH / 3 else "wolf_realm" if t < RUN_LENGTH else "toad_realm"
+    def background(self, surface: pygame.Surface, t: float,
+                   camera_x: float = 0.0, camera_y: float = 0.0, scenic: bool = False) -> None:
+        key = "raven_realm" if t < RUN_LENGTH / 3 else "wolf_realm" if t < RUN_LENGTH else "toad_realm"
+        if scenic and self.background_art:
             surface.blit(self.background_art[key], (0, 0))
-            mote_colors = {
-                "raven_realm": (146, 194, 208),
-                "wolf_realm": (219, 170, 111),
-                "toad_realm": (180, 135, 222),
-            }
-            mote = mote_colors[key]
-            for i in range(13):
-                x = (i * 83 + int(t * (4 + i % 3))) % WIDTH
-                y = 58 + (i * 47 + int(math.sin(t * 0.7 + i) * 5)) % 184
-                surface.set_at((x, y), mote)
-                if i % 4 == 0:
-                    surface.set_at((x + 1, y), (min(255, mote[0] + 38), min(255, mote[1] + 38), min(255, mote[2] + 38)))
+            self._draw_motes(surface, t, key, 0.0, 0.0)
+            return
+        tile = self.ground_tiles.get(key)
+        if tile:
+            tw, th = tile.get_size()
+            offset_x = int(camera_x) % tw
+            offset_y = int(camera_y) % th
+            for x in range(-tw - offset_x, WIDTH + tw, tw):
+                for y in range(-th - offset_y, HEIGHT + th, th):
+                    surface.blit(tile, (x, y))
+            self._draw_motes(surface, t, key, camera_x, camera_y)
             return
         surface.fill((15, 22, 37))
         # Pixelated mountain silhouettes and softly glimmering spirit lights.
@@ -148,55 +291,81 @@ class Renderer:
             y = 198 + (i * 29) % 66
             pygame.draw.rect(surface, (36, 52, 59), (x, y, 4 + i % 5, 1))
 
+    @staticmethod
+    def _draw_motes(surface: pygame.Surface, t: float, key: str,
+                    camera_x: float, camera_y: float) -> None:
+        mote_colors = {
+            "raven_realm": (146, 194, 208),
+            "wolf_realm": (219, 170, 111),
+            "toad_realm": (180, 135, 222),
+        }
+        mote = mote_colors[key]
+        for i in range(13):
+            x = (i * 83 + int(t * (4 + i % 3)) + int(camera_x)) % WIDTH
+            y = 58 + (i * 47 + int(math.sin(t * 0.7 + i) * 5) + int(camera_y)) % 184
+            surface.set_at((x, y), mote)
+            if i % 4 == 0:
+                surface.set_at((x + 1, y), (min(255, mote[0] + 38), min(255, mote[1] + 38), min(255, mote[2] + 38)))
+
     def world(self, surface: pygame.Surface, game: Game) -> None:
+        camera_x = game.player.x - WIDTH / 2
+        camera_y = game.player.y - HEIGHT / 2
+        self._draw_decorations(surface, game, camera_x, camera_y)
         for hazard in game.hazards:
             pulse = int(2 * math.sin(game.time * 5))
             if hazard.hostile:
                 fill, edge, dot = (72, 22, 39), (235, 48 + pulse, 72), (255, 117, 117)
             else:
                 fill, edge, dot = (74, 39, 19), (255, 168 + pulse, 74), (255, 230, 150)
-            pygame.draw.ellipse(surface, fill, (int(hazard.x - hazard.radius), int(hazard.y - hazard.radius // 2), hazard.radius * 2, hazard.radius))
-            pygame.draw.ellipse(surface, edge, (int(hazard.x - hazard.radius + 3), int(hazard.y - hazard.radius // 2 + 2), hazard.radius * 2 - 6, hazard.radius - 4), 1)
-            pygame.draw.circle(surface, dot, (int(hazard.x), int(hazard.y - 2)), 2)
+            hx = int(hazard.x - camera_x)
+            hy = int(hazard.y - camera_y)
+            pygame.draw.ellipse(surface, fill, (hx - hazard.radius, hy - hazard.radius // 2, hazard.radius * 2, hazard.radius))
+            pygame.draw.ellipse(surface, edge, (hx - hazard.radius + 3, hy - hazard.radius // 2 + 2, hazard.radius * 2 - 6, hazard.radius - 4), 1)
+            pygame.draw.circle(surface, dot, (hx, hy - 2), 2)
         for orb in game.orbs:
-            pygame.draw.rect(surface, (116, 246, 183), (int(orb.x) - 2, int(orb.y) - 2, 5, 5))
-            surface.set_at((int(orb.x), int(orb.y) - 3), (218, 255, 219))
+            ox = int(orb.x - camera_x)
+            oy = int(orb.y - camera_y)
+            pygame.draw.rect(surface, (116, 246, 183), (ox - 2, oy - 2, 5, 5))
+            surface.set_at((ox, oy - 3), (218, 255, 219))
         for shot in game.projectiles:
+            sx = int(shot.x - camera_x)
+            sy = int(shot.y - camera_y)
             if shot.hostile:
-                if shot.kind == "feather":
-                    tail = (int(shot.x - shot.vx * 0.065), int(shot.y - shot.vy * 0.065))
-                    pygame.draw.line(surface, (139, 27, 51), tail, (int(shot.x), int(shot.y)), 3)
-                    pygame.draw.line(surface, (255, 77, 94), tail, (int(shot.x), int(shot.y)), 1)
-                    surface.set_at((int(shot.x), int(shot.y)), (255, 220, 206))
-                else:
-                    pygame.draw.circle(surface, (193, 29, 66), (int(shot.x), int(shot.y)), 6)
-                    pygame.draw.circle(surface, (255, 89, 110), (int(shot.x), int(shot.y)), 4)
-                    pygame.draw.circle(surface, (255, 222, 214), (int(shot.x) - 1, int(shot.y) - 1), 2)
+                pygame.draw.circle(surface, (193, 29, 66), (sx, sy), 6)
+                pygame.draw.circle(surface, (255, 89, 110), (sx, sy), 4)
+                pygame.draw.circle(surface, (255, 222, 214), (sx - 1, sy - 1), 2)
             elif shot.kind == "fire":
-                pygame.draw.circle(surface, (248, 103, 66), (int(shot.x), int(shot.y)), 4)
-                pygame.draw.rect(surface, (255, 224, 135), (int(shot.x) - 1, int(shot.y) - 2, 3, 3))
+                pygame.draw.circle(surface, (248, 103, 66), (sx, sy), 4)
+                pygame.draw.rect(surface, (255, 224, 135), (sx - 1, sy - 2, 3, 3))
             else:
-                pygame.draw.line(surface, (191, 216, 255), (int(shot.x), int(shot.y)),
-                                 (int(shot.x - shot.vx * 0.055), int(shot.y - shot.vy * 0.055)), 2)
-                surface.set_at((int(shot.x), int(shot.y)), (255, 248, 200))
+                pygame.draw.line(surface, (191, 216, 255), (sx, sy),
+                                 (int(sx - shot.vx * 0.055), int(sy - shot.vy * 0.055)), 2)
+                surface.set_at((sx, sy), (255, 248, 200))
         for x, y, radius, life in game.slashes:
             col = (255, 143, 79) if game.selected_character == "female" and radius > 20 else (133, 215, 247) if radius > 30 else (249, 232, 174)
-            pygame.draw.circle(surface, col, (int(x), int(y)), int(radius * max(0.2, life / 0.22)), 1)
+            pygame.draw.circle(surface, col, (int(x - camera_x), int(y - camera_y)), int(radius * max(0.2, life / 0.22)), 1)
         for enemy in game.enemies:
-            self.enemy(surface, enemy, game.time)
+            self.enemy(surface, enemy, game.time, camera_x, camera_y)
+        for x1, y1, x2, y2, _life in game.bolts:
+            bx1, by1 = int(x1 - camera_x), int(y1 - camera_y)
+            bx2, by2 = int(x2 - camera_x), int(y2 - camera_y)
+            pygame.draw.line(surface, (70, 140, 255), (bx1, by1), (bx2, by2), 4)
+            pygame.draw.line(surface, (225, 248, 255), (bx1, by1), (bx2, by2), 1)
+            pygame.draw.circle(surface, (235, 250, 255), (bx2, by2), 2)
         p = game.player
+        cx, cy = WIDTH // 2, HEIGHT // 2
         for i in range(p.talisman_level):
             if i >= 8:
                 break
             a = game.time * 2.3 + math.tau * i / min(8, p.talisman_level)
-            x, y = int(p.x + math.cos(a) * 21), int(p.y + math.sin(a) * 14)
+            x, y = int(cx + math.cos(a) * 21), int(cy + math.sin(a) * 14)
             pygame.draw.rect(surface, (244, 184, 92), (x - 2, y - 3, 5, 7))
             pygame.draw.rect(surface, (255, 232, 157), (x - 1, y - 2, 2, 4))
         if not (p.invulnerable > 0 and int(p.invulnerable * 18) % 2):
             self.player_sprite(surface, p, game.selected_character, game.time)
 
     def player_sprite(self, surface: pygame.Surface, player, character: str, time: float) -> None:
-        x, y = int(player.x), int(player.y)
+        x, y = WIDTH // 2, HEIGHT // 2
         frames = self.player_art[character][player.facing]
         frame = int(time * 10) % len(frames) if player.moving else 0
         sprite = frames[frame]
@@ -205,8 +374,9 @@ class Renderer:
         bob = round(math.sin(time * (12 if player.moving else 2)) * (1 if player.moving else 0.5))
         surface.blit(sprite, sprite.get_rect(center=(x, y + bob)))
 
-    def enemy(self, surface: pygame.Surface, enemy, time: float) -> None:
-        x, y, r = int(enemy.x), int(enemy.y), enemy.radius
+    def enemy(self, surface: pygame.Surface, enemy, time: float,
+              camera_x: float = 0.0, camera_y: float = 0.0) -> None:
+        x, y, r = int(enemy.x - camera_x), int(enemy.y - camera_y), enemy.radius
         sprite = self.enemy_art[enemy.kind]
         bob = round(math.sin(time * 5 + x) * (1 if not enemy.elite else 2))
         pygame.draw.ellipse(surface, (9, 14, 23), (x - r - 3, y + r - 2, r * 2 + 6, 5))
@@ -348,7 +518,7 @@ class Renderer:
                 title = "控火诀" if game.selected_character == "female" else "御剑术"
                 desc = "火球伤害提高" if game.selected_character == "female" else "灵剑伤害提高"
             self.text(surface, title, (card.centerx, card.y + 40), 12, (232, 229, 213), "midtop")
-            for row, line in enumerate([desc[start:start + 9] for start in range(0, len(desc), 9)][:2]):
+            for row, line in enumerate([desc[start:start + 13] for start in range(0, len(desc), 13)][:2]):
                 self.text(surface, line, (card.centerx, card.y + 67 + row * 12), 8, (165, 181, 188), "midtop")
             self.button(surface, f"按 {i + 1} 选择", card.x + 16, card.y + 102, 96, 22, accents[i])
         self.text(surface, "点击卡牌或按数字键", (WIDTH // 2, 235), 8, (139, 154, 164), "midtop")

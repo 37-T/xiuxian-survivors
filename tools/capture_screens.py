@@ -26,8 +26,10 @@ OUTPUT = (1280, 720)
 
 def save(game: Game, renderer: Renderer, name: str) -> None:
     canvas = pygame.Surface(CANVAS)
+    renderer.begin_text_layer()
     renderer.draw(canvas, game)
     image = pygame.transform.scale(canvas, OUTPUT)
+    renderer.flush_text(image, (0, 0), OUTPUT[0] / CANVAS[0])
     pygame.image.save(image, str(OUT / name))
 
 
@@ -58,13 +60,14 @@ def main() -> None:
     ]
     gameplay.orbs = [Orb(260, 120), Orb(215, 185), Orb(305, 92)]
     gameplay.projectiles = [Projectile(180, 120, 205, 0, 12, 1.8, "sword")]
+    gameplay.bolts = [(240, 150, 330, 110, 0.12)]
     save(gameplay, renderer, "gameplay.png")
 
     upgrade = Game()
     upgrade.start()
     upgrade.time = 90.0
     upgrade.state = "upgrade"
-    upgrade.upgrades = ["sword_evo", "thunder", "guard"]
+    upgrade.upgrades = ["chain", "sword_evo", "guard"]
     save(upgrade, renderer, "upgrade.png")
 
     boss = Game()

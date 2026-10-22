@@ -59,6 +59,7 @@ def main() -> None:
 
         keys = pygame.key.get_pressed()
         game.update(dt, keys)
+        renderer.begin_text_layer()
         renderer.draw(canvas, game)
 
         screen.fill((8, 11, 22))
@@ -67,6 +68,7 @@ def main() -> None:
             scaled_canvas = pygame.Surface(view_size).convert()
         pygame.transform.scale(canvas, view_size, scaled_canvas)
         screen.blit(scaled_canvas, origin)
+        renderer.flush_text(screen, origin, scale)
         pygame.display.flip()
 
     pygame.quit()

@@ -16,8 +16,6 @@ BOSS_HP = 500
 HAZARD_TICK = 0.65
 POISON_DAMAGE = 7
 FIRE_ZONE_DAMAGE = 10
-PLAYER_MARGIN_X = 26
-PLAYER_MARGIN_Y = 30
 
 
 @dataclass
@@ -38,8 +36,10 @@ class Player:
     talisman_level: int = 0
     thunder_level: int = 0
     guard_level: int = 0
+    chain_level: int = 0
     cooldown: float = 0
     thunder_cooldown: float = 0
+    chain_cooldown: float = 0
     facing: str = "down"
     moving: bool = False
     sword_evolution: bool = False
@@ -108,6 +108,7 @@ UPGRADES = {
     "sword": ("御剑术", "灵剑伤害提高", "sword_level"),
     "talisman": ("护身符箓", "增加一枚环绕符箓", "talisman_level"),
     "thunder": ("引雷真诀", "雷霆术威力提高", "thunder_level"),
+    "chain": ("雷法·连锁", "自动攻击并弹射附近妖兽", "chain_level"),
     "guard": ("金光护体", "减伤并恢复少许气血", "guard_level"),
     "breath": ("周天吐纳", "气血上限提高并恢复", "breath"),
     "wind": ("御风而行", "移动速度提高", "wind"),
@@ -144,6 +145,7 @@ class Game:
         self.elite_defeated = False
         self.shake = 0.0
         self.slashes: list[tuple[float, float, float, float]] = []
+        self.bolts: list[tuple[float, float, float, float, float]] = []
         self.boss_burst_timer = 0
 
     def start(self) -> None:
@@ -206,6 +208,8 @@ class Game:
             p.talisman_level += 1
         elif key == "thunder":
             p.thunder_level += 1
+        elif key == "chain":
+            p.chain_level += 1
         elif key == "guard":
             p.guard_level += 1
             p.max_hp += 12
@@ -252,12 +256,11 @@ class Game:
                     if self._point_segment_distance(enemy.x, enemy.y, p.x-dx/length*24, p.y-dy/length*24, p.x, p.y) < enemy.radius+7:
                         self.damage_enemy(enemy, 20)
                 p.dash_cooldown = 0.32
-        p.x = max(PLAYER_MARGIN_X, min(WIDTH - PLAYER_MARGIN_X, p.x))
-        p.y = max(PLAYER_MARGIN_Y, min(HEIGHT - PLAYER_MARGIN_Y, p.y))
         p.invulnerable = max(0, p.invulnerable - dt)
         p.dash_cooldown = max(0, p.dash_cooldown - dt)
         self.shake = max(0, self.shake - dt * 16)
         self.slashes = [(x, y, r, t - dt) for x, y, r, t in self.slashes if t > dt]
+        self.bolts = [(x1, y1, x2, y2, t - dt) for x1, y1, x2, y2, t in self.bolts if t > dt]
 
         self.spawn_timer -= dt
         interval = max(0.32, 1.05 - self.time / 720)
@@ -285,6 +288,21 @@ class Game:
                                                        vy / dist * (250 if p.sword_evolution else 205), p.damage * (1.15 if p.sword_evolution else 1), 1.8, "sword"))
                 p.cooldown = p.attack_delay
 
+        if p.chain_level:
+            p.chain_cooldown -= dt
+            if p.chain_cooldown <= 0:
+                target = self.nearest_enemy(170)
+                if target:
+                    self.damage_enemy(target, 8 + p.chain_level * 5)
+                    self.bolts.append((p.x, p.y, target.x, target.y, 0.16))
+                    nearby = sorted((e for e in self.enemies if e is not target),
+                                    key=lambda e: math.hypot(e.x - target.x, e.y - target.y))
+                    for chained in nearby[:2]:
+                        if math.hypot(chained.x - target.x, chained.y - target.y) < 95:
+                            self.damage_enemy(chained, 5 + p.chain_level * 3)
+                            self.bolts.append((target.x, target.y, chained.x, chained.y, 0.14))
+                    p.chain_cooldown = max(0.8, 2.2 - p.chain_level * 0.2)
+
         if p.thunder_level:
             p.thunder_cooldown -= dt
             if p.thunder_cooldown <= 0:
@@ -311,7 +329,7 @@ class Game:
                     self.projectiles.remove(shot)
                     if self.state == "lost":
                         return
-                elif shot.life <= 0 or not (-8 < shot.x < WIDTH + 8 and -8 < shot.y < HEIGHT + 8):
+                elif shot.life <= 0 or self._out_of_range(shot.x, shot.y):
                     self.projectiles.remove(shot)
                 continue
             hit = next((e for e in self.enemies if math.hypot(e.x - shot.x, e.y - shot.y) < e.radius + 4), None)
@@ -335,7 +353,7 @@ class Game:
                         self.damage_enemy(hit, shot.damage)
                     self.slashes.append((shot.x, shot.y, 17, 0.12))
                 self.projectiles.remove(shot)
-            elif shot.life <= 0 or not (-5 < shot.x < WIDTH + 5 and -5 < shot.y < HEIGHT + 5):
+            elif shot.life <= 0 or self._out_of_range(shot.x, shot.y):
                 self.projectiles.remove(shot)
 
         for enemy in self.enemies[:]:
@@ -344,17 +362,10 @@ class Game:
             vx, vy = p.x - enemy.x, p.y - enemy.y
             dist = max(1, math.hypot(vx, vy))
             if enemy.kind == "raven":
-                # 乌鸦盘旋在中距离，以羽刃远程骚扰，不会冲向玩家。
-                if dist > 145:
-                    enemy.x += vx / dist * enemy.speed * dt
-                    enemy.y += vy / dist * enemy.speed * dt
-                elif dist < 95:
-                    enemy.x -= vx / dist * enemy.speed * 0.8 * dt
-                    enemy.y -= vy / dist * enemy.speed * 0.8 * dt
-                if enemy.attack_cooldown <= 0 and dist < 200:
-                    self.projectiles.append(Projectile(enemy.x, enemy.y, vx / dist * 112, vy / dist * 112,
-                                                       7, 2.2, "feather", True))
-                    enemy.attack_cooldown = 2.6
+                # 乌鸦不再发射羽刃，只缓慢靠近，以接触伤害骚扰玩家。
+                if dist > 14:
+                    enemy.x += vx / dist * enemy.speed * 0.8 * dt
+                    enemy.y += vy / dist * enemy.speed * 0.8 * dt
             elif enemy.kind == "wolf":
                 # 妖狼只会持续追猎，贴近后以普通撕咬造成接触伤害。
                 if dist > 9:
@@ -434,9 +445,10 @@ class Game:
                         break
 
     def spawn_enemy(self, elite: bool = False) -> None:
-        side = random.randrange(4)
-        x = random.randrange(WIDTH) if side in (0, 2) else (-8 if side == 3 else WIDTH + 8)
-        y = (-8 if side == 0 else HEIGHT + 8) if side in (0, 2) else random.randrange(HEIGHT)
+        angle = random.uniform(0, math.tau)
+        distance = random.uniform(300, 380)
+        x = self.player.x + math.cos(angle) * distance
+        y = self.player.y + math.sin(angle) * distance
         if elite:
             self.enemies.append(Enemy(x, y, "toad_boss", BOSS_HP, 13, 18, 19, (119, 152, 112), True,
                                       attack_cooldown=1.4))
@@ -501,6 +513,9 @@ class Game:
             keys.append("wind_evo")
         random.shuffle(keys)
         return keys[:3]
+
+    def _out_of_range(self, x: float, y: float, limit: float = 620) -> bool:
+        return math.hypot(x - self.player.x, y - self.player.y) > limit
 
     @staticmethod
     def _point_segment_distance(px: float, py: float, ax: float, ay: float, bx: float, by: float) -> float:
