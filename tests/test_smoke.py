@@ -20,9 +20,17 @@ from game import (
     Enemy,
     Game,
     Hazard,
+    Projectile,
     WIDTH,
 )
-from layout import CHARACTER_CARDS, PANEL_BUTTON, START_BUTTON, UPGRADE_CARDS
+from layout import (
+    CHARACTER_CARDS,
+    PANEL_BUTTON,
+    PAUSE_CONTINUE_BUTTON,
+    PAUSE_MENU_BUTTON,
+    START_BUTTON,
+    UPGRADE_CARDS,
+)
 from renderer import Renderer
 
 
@@ -121,6 +129,10 @@ class SmokeTests(unittest.TestCase):
         game.on_key(pygame.K_RETURN)
         self.assertEqual(game.state, "playing")
 
+        game.on_key(pygame.K_p)
+        game.on_key(pygame.K_m)
+        self.assertEqual(game.state, "menu")
+
     def test_boss_spawns_with_max_hp_and_winning_blocks_damage(self) -> None:
         game = Game()
         game.start()
@@ -149,8 +161,12 @@ class SmokeTests(unittest.TestCase):
         self.assertEqual(game.state, "playing")
 
         game.state = "paused"
-        game.on_click(PANEL_BUTTON.center)
+        game.on_click(PAUSE_CONTINUE_BUTTON.center)
         self.assertEqual(game.state, "playing")
+
+        game.state = "paused"
+        game.on_click(PAUSE_MENU_BUTTON.center)
+        self.assertEqual(game.state, "menu")
 
         game.state = "won"
         game.on_click(PANEL_BUTTON.center)
@@ -197,6 +213,42 @@ class SmokeTests(unittest.TestCase):
         for _ in range(120):
             game.update(1 / 60, FakeKeys())
         self.assertFalse(any(shot.hostile for shot in game.projectiles))
+
+    def test_pause_panel_renders(self) -> None:
+        game = Game()
+        game.start()
+        game.state = "paused"
+        target = pygame.Surface((1280, 720))
+        self.renderer.begin_text_layer()
+        self.renderer.draw(self.surface(), game)
+        self.renderer.flush_text(target, (0, 0), 1280 / WIDTH)
+
+    def test_fireball_explosion_area_damage(self) -> None:
+        game = Game()
+        game.selected_character = "female"
+        game.start()
+        game.spawn_timer = 999
+        game.player.cooldown = 999
+        game.player.x, game.player.y = 240, 135
+        first = Enemy(200, 135, "wolf", 100, 0, 0, 10, (0, 0, 0))
+        second = Enemy(215, 135, "wolf", 100, 0, 0, 10, (0, 0, 0))
+        game.enemies = [first, second]
+        game.projectiles = [Projectile(200, 135, 0, 0, 12, 0.5, "fire")]
+        game.update(1 / 60, FakeKeys())
+        self.assertLess(first.hp, 100)
+        self.assertLess(second.hp, 100)
+        self.assertTrue(game.explosions)
+
+    def test_pet_summon_fires(self) -> None:
+        game = Game()
+        game.start()
+        game.spawn_timer = 999
+        game.player.cooldown = 999
+        game.player.pet_level = 1
+        game.player.x, game.player.y = 240, 135
+        game.enemies = [Enemy(390, 135, "wolf", 100, 0, 0, 10, (0, 0, 0))]
+        game.update(1 / 60, FakeKeys())
+        self.assertTrue(any(shot.kind == "pet" for shot in game.projectiles))
 
     def test_high_res_text_overlay(self) -> None:
         game = Game()

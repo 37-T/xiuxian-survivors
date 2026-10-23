@@ -8,7 +8,14 @@ from dataclasses import dataclass
 
 import pygame
 
-from layout import CHARACTER_CARDS, PANEL_BUTTON, START_BUTTON, UPGRADE_CARDS
+from layout import (
+    CHARACTER_CARDS,
+    PANEL_BUTTON,
+    PAUSE_CONTINUE_BUTTON,
+    PAUSE_MENU_BUTTON,
+    START_BUTTON,
+    UPGRADE_CARDS,
+)
 
 WIDTH, HEIGHT = 480, 270
 RUN_LENGTH = 8 * 60
@@ -16,6 +23,8 @@ BOSS_HP = 500
 HAZARD_TICK = 0.65
 POISON_DAMAGE = 7
 FIRE_ZONE_DAMAGE = 10
+FIRE_BLAST_RADIUS = 30
+FIRE_EVO_BLAST_RADIUS = 52
 
 
 @dataclass
@@ -37,9 +46,11 @@ class Player:
     thunder_level: int = 0
     guard_level: int = 0
     chain_level: int = 0
+    pet_level: int = 0
     cooldown: float = 0
     thunder_cooldown: float = 0
     chain_cooldown: float = 0
+    pet_cooldown: float = 0
     facing: str = "down"
     moving: bool = False
     sword_evolution: bool = False
@@ -109,6 +120,7 @@ UPGRADES = {
     "talisman": ("护身符箓", "增加一枚环绕符箓", "talisman_level"),
     "thunder": ("引雷真诀", "雷霆术威力提高", "thunder_level"),
     "chain": ("雷法·连锁", "自动攻击并弹射附近妖兽", "chain_level"),
+    "pet": ("灵宠召唤", "召唤灵狐自动攻击妖兽", "pet_level"),
     "guard": ("金光护体", "减伤并恢复少许气血", "guard_level"),
     "breath": ("周天吐纳", "气血上限提高并恢复", "breath"),
     "wind": ("御风而行", "移动速度提高", "wind"),
@@ -146,6 +158,7 @@ class Game:
         self.shake = 0.0
         self.slashes: list[tuple[float, float, float, float]] = []
         self.bolts: list[tuple[float, float, float, float, float]] = []
+        self.explosions: list[tuple[float, float, float, float, float]] = []
         self.boss_burst_timer = 0
 
     def start(self) -> None:
@@ -176,6 +189,8 @@ class Game:
             self.state = "paused"
         elif self.state == "paused" and key in (pygame.K_p, pygame.K_ESCAPE, pygame.K_RETURN, pygame.K_SPACE):
             self.state = "playing"
+        elif self.state == "paused" and key == pygame.K_m:
+            self.return_to_menu()
 
     def on_click(self, point: tuple[float, float]) -> None:
         if self.state == "menu":
@@ -192,8 +207,15 @@ class Game:
                 if index < len(self.upgrades) and card.collidepoint(point):
                     self.choose_upgrade(index)
                     break
-        elif self.state == "paused" and PANEL_BUTTON.collidepoint(point):
-            self.state = "playing"
+        elif self.state == "paused":
+            if PAUSE_CONTINUE_BUTTON.collidepoint(point):
+                self.state = "playing"
+            elif PAUSE_MENU_BUTTON.collidepoint(point):
+                self.return_to_menu()
+
+    def return_to_menu(self) -> None:
+        self.reset()
+        self.state = "menu"
 
     def choose_upgrade(self, index: int) -> None:
         if self.state != "upgrade" or not 0 <= index < len(self.upgrades):
@@ -210,6 +232,8 @@ class Game:
             p.thunder_level += 1
         elif key == "chain":
             p.chain_level += 1
+        elif key == "pet":
+            p.pet_level += 1
         elif key == "guard":
             p.guard_level += 1
             p.max_hp += 12
@@ -261,6 +285,7 @@ class Game:
         self.shake = max(0, self.shake - dt * 16)
         self.slashes = [(x, y, r, t - dt) for x, y, r, t in self.slashes if t > dt]
         self.bolts = [(x1, y1, x2, y2, t - dt) for x1, y1, x2, y2, t in self.bolts if t > dt]
+        self.explosions = [(x, y, t - dt, m, r) for x, y, t, m, r in self.explosions if t > dt]
 
         self.spawn_timer -= dt
         interval = max(0.32, 1.05 - self.time / 720)
@@ -303,6 +328,21 @@ class Game:
                             self.bolts.append((target.x, target.y, chained.x, chained.y, 0.14))
                     p.chain_cooldown = max(0.8, 2.2 - p.chain_level * 0.2)
 
+        if p.pet_level:
+            p.pet_cooldown -= dt
+            if p.pet_cooldown <= 0:
+                angle = self.time * 2.3
+                pet_x = p.x + math.cos(angle) * 30
+                pet_y = p.y + math.sin(angle) * 22
+                target = self.nearest_enemy(190)
+                if target:
+                    vx, vy = target.x - pet_x, target.y - pet_y
+                    dist = max(1, math.hypot(vx, vy))
+                    self.projectiles.append(Projectile(
+                        pet_x, pet_y, vx / dist * 230, vy / dist * 230,
+                        6 + p.pet_level * 4, 1.6, "pet"))
+                    p.pet_cooldown = max(0.75, 1.9 - p.pet_level * 0.12)
+
         if p.thunder_level:
             p.thunder_cooldown -= dt
             if p.thunder_cooldown <= 0:
@@ -335,13 +375,16 @@ class Game:
             hit = next((e for e in self.enemies if math.hypot(e.x - shot.x, e.y - shot.y) < e.radius + 4), None)
             if hit:
                 if shot.kind == "fire":
-                    blast_radius = 43 if p.fire_evolution else 26
+                    blast_radius = FIRE_EVO_BLAST_RADIUS if p.fire_evolution else FIRE_BLAST_RADIUS
                     for enemy in self.enemies[:]:
                         if math.hypot(enemy.x - hit.x, enemy.y - hit.y) <= blast_radius + enemy.radius:
                             self.damage_enemy(enemy, shot.damage * (1.3 if p.fire_evolution else 1))
                     if p.fire_evolution:
                         self.hazards.append(Hazard(hit.x, hit.y, 25, 2.8, hostile=False))
-                    self.slashes.append((hit.x, hit.y, blast_radius, 0.2))
+                    self.explosions.append((hit.x, hit.y, 0.28, 0.28, blast_radius))
+                elif shot.kind == "pet":
+                    self.damage_enemy(hit, shot.damage)
+                    self.slashes.append((shot.x, shot.y, 14, 0.12))
                 else:
                     if p.sword_evolution:
                         for enemy in self.enemies[:]:

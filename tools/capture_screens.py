@@ -51,6 +51,7 @@ def main() -> None:
     gameplay.player.level = 4
     gameplay.player.xp = 10
     gameplay.player.next_xp = 34
+    gameplay.player.pet_level = 1
     gameplay.player.x, gameplay.player.y = 240, 150
     gameplay.enemies = [
         Enemy(110, 80, "raven", 26, 0, 10, 8, (102, 116, 141), attack_cooldown=1.2),
@@ -67,7 +68,7 @@ def main() -> None:
     upgrade.start()
     upgrade.time = 90.0
     upgrade.state = "upgrade"
-    upgrade.upgrades = ["chain", "sword_evo", "guard"]
+    upgrade.upgrades = ["pet", "chain", "sword_evo"]
     save(upgrade, renderer, "upgrade.png")
 
     boss = Game()
@@ -92,8 +93,17 @@ def main() -> None:
         Hazard(210, 190, 19, 3.0),
         Hazard(300, 150, 25, 3.0, hostile=False),
     ]
-    boss.projectiles = [Projectile(260, 160, -76, 76, 13, 2.6, "poison", True)]
+    boss.projectiles = [
+        Projectile(260, 160, -76, 76, 13, 2.6, "poison", True),
+        Projectile(310, 210, -120, -35, 12, 2.2, "fire"),
+    ]
+    boss.explosions = [(310, 205, 0.16, 0.28, 52)]
     save(boss, renderer, "boss.png")
+
+    pause = Game()
+    pause.start()
+    pause.state = "paused"
+    save(pause, renderer, "pause.png")
 
     pygame.quit()
     print(f"Wrote screenshots to {OUT}")

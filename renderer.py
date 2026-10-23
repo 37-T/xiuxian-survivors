@@ -13,6 +13,8 @@ from layout import (
     MENU_PANEL,
     PANEL,
     PANEL_BUTTON,
+    PAUSE_CONTINUE_BUTTON,
+    PAUSE_MENU_BUTTON,
     START_BUTTON,
     UPGRADE_CARDS,
 )
@@ -41,6 +43,10 @@ class Renderer:
         self.enemy_rims: dict[str, pygame.Surface] = {}
         self.background_art: dict[str, pygame.Surface] = {}
         self.ground_tiles: dict[str, pygame.Surface] = {}
+        self.ground_variants: dict[str, tuple[pygame.Surface, ...]] = {}
+        self.ground_ai: dict[str, bool] = {}
+        self.pet_art: pygame.Surface | None = None
+        self.effect_art: dict[str, pygame.Surface] = {}
         self.hit_overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
         self.text_queue: list[tuple[str, tuple[float, float], int, tuple[int, int, int], str]] | None = None
         self.load_art()
@@ -80,9 +86,31 @@ class Renderer:
         for key in ("raven_realm", "wolf_realm", "toad_realm"):
             image = pygame.image.load(str(background_dir / f"{key}.png")).convert()
             self.background_art[key] = pygame.transform.scale(image, (WIDTH, HEIGHT))
-        self.ground_tiles = {
-            key: self._make_ground_tile(key) for key in ("raven_realm", "wolf_realm", "toad_realm")
-        }
+        ground_dir = Path(__file__).resolve().parent / "assets" / "grounds"
+        for key in ("raven_realm", "wolf_realm", "toad_realm"):
+            path = ground_dir / f"{key}.png"
+            if path.exists():
+                tile = pygame.image.load(str(path)).convert()
+                self.ground_ai[key] = True
+            else:
+                tile = self._make_ground_tile(key)
+                self.ground_ai[key] = False
+            self.ground_tiles[key] = tile
+            self.ground_variants[key] = (
+                tile,
+                pygame.transform.flip(tile, True, False),
+                pygame.transform.flip(tile, False, True),
+                pygame.transform.flip(tile, True, True),
+            )
+
+        pet_path = Path(__file__).resolve().parent / "assets" / "pets" / "spirit_fox.png"
+        if pet_path.exists():
+            self.pet_art = pygame.image.load(str(pet_path)).convert_alpha()
+        effects_dir = Path(__file__).resolve().parent / "assets" / "effects"
+        for name in ("fireball", "lightning", "slash", "explosion"):
+            path = effects_dir / f"{name}.png"
+            if path.exists():
+                self.effect_art[name] = pygame.image.load(str(path)).convert()
 
     @staticmethod
     def _make_ground_tile(key: str) -> pygame.Surface:
@@ -143,7 +171,7 @@ class Renderer:
 
     def _draw_decorations(self, surface: pygame.Surface, game: Game,
                           camera_x: float, camera_y: float) -> None:
-        key = "raven_realm" if game.time < RUN_LENGTH / 3 else "wolf_realm" if game.time < RUN_LENGTH else "toad_realm"
+        key = self._biome_key(game.time)
         start_x = math.floor((camera_x - 24) / DECOR_CELL)
         end_x = math.floor((camera_x + WIDTH + 24) / DECOR_CELL)
         start_y = math.floor((camera_y - 24) / DECOR_CELL)
@@ -243,7 +271,13 @@ class Renderer:
         if game.state == "upgrade":
             self.upgrade(surface, game)
         elif game.state == "paused":
-            self.panel(surface, "静修中", "秘境中的时间已停驻", "按 P / Esc / Enter 继续", "继续", (207, 193, 141))
+            self.panel(
+                surface, "静修中", "秘境中的时间已停驻", "按 P / Esc 继续",
+                "继续", (207, 193, 141),
+                button_rect=PAUSE_CONTINUE_BUTTON,
+                secondary=("主菜单", PAUSE_MENU_BUTTON),
+                hint="P / Esc 继续 · M 主菜单",
+            )
         elif game.state == "won":
             self.panel(surface, "秘境通关", "你已参透此境，踏入新的仙途。", f"存活 {self.time_text(game.time)}  ·  斩妖 {game.kills}", "再入秘境", (154, 226, 190))
         elif game.state == "lost":
@@ -253,21 +287,27 @@ class Renderer:
     def time_text(seconds: float) -> str:
         return f"{int(seconds) // 60:02d}:{int(seconds) % 60:02d}"
 
+    @staticmethod
+    def _biome_key(t: float) -> str:
+        return "raven_realm" if t < RUN_LENGTH / 3 else "wolf_realm" if t < RUN_LENGTH else "toad_realm"
+
     def background(self, surface: pygame.Surface, t: float,
                    camera_x: float = 0.0, camera_y: float = 0.0, scenic: bool = False) -> None:
-        key = "raven_realm" if t < RUN_LENGTH / 3 else "wolf_realm" if t < RUN_LENGTH else "toad_realm"
+        key = self._biome_key(t)
         if scenic and self.background_art:
             surface.blit(self.background_art[key], (0, 0))
             self._draw_motes(surface, t, key, 0.0, 0.0)
             return
-        tile = self.ground_tiles.get(key)
-        if tile:
-            tw, th = tile.get_size()
+        variants = self.ground_variants.get(key)
+        if variants:
+            tw, th = variants[0].get_size()
             offset_x = int(camera_x) % tw
             offset_y = int(camera_y) % th
             for x in range(-tw - offset_x, WIDTH + tw, tw):
                 for y in range(-th - offset_y, HEIGHT + th, th):
-                    surface.blit(tile, (x, y))
+                    ix = math.floor((camera_x + x) / tw)
+                    iy = math.floor((camera_y + y) / th)
+                    surface.blit(variants[(ix & 1) + 2 * (iy & 1)], (x, y))
             self._draw_motes(surface, t, key, camera_x, camera_y)
             return
         surface.fill((15, 22, 37))
@@ -310,7 +350,8 @@ class Renderer:
     def world(self, surface: pygame.Surface, game: Game) -> None:
         camera_x = game.player.x - WIDTH / 2
         camera_y = game.player.y - HEIGHT / 2
-        self._draw_decorations(surface, game, camera_x, camera_y)
+        if not self.ground_ai.get(self._biome_key(game.time), False):
+            self._draw_decorations(surface, game, camera_x, camera_y)
         for hazard in game.hazards:
             pulse = int(2 * math.sin(game.time * 5))
             if hazard.hostile:
@@ -335,25 +376,76 @@ class Renderer:
                 pygame.draw.circle(surface, (255, 89, 110), (sx, sy), 4)
                 pygame.draw.circle(surface, (255, 222, 214), (sx - 1, sy - 1), 2)
             elif shot.kind == "fire":
-                pygame.draw.circle(surface, (248, 103, 66), (sx, sy), 4)
-                pygame.draw.rect(surface, (255, 224, 135), (sx - 1, sy - 2, 3, 3))
+                if "fireball" in self.effect_art:
+                    sprite = self.effect_art["fireball"]
+                    rotation = math.degrees(math.atan2(-shot.vy, shot.vx))
+                    rotated = pygame.transform.rotate(sprite, rotation)
+                    surface.blit(rotated, rotated.get_rect(center=(sx, sy)), special_flags=pygame.BLEND_ADD)
+                else:
+                    tail = (int(sx - shot.vx * 0.065), int(sy - shot.vy * 0.065))
+                    pygame.draw.line(surface, (255, 110, 40), tail, (sx, sy), 3)
+                    pygame.draw.circle(surface, (246, 92, 42), (sx, sy), 8)
+                    pygame.draw.circle(surface, (255, 168, 72), (sx, sy), 5)
+                    pygame.draw.circle(surface, (255, 240, 190), (sx - 1, sy - 1), 2)
+            elif shot.kind == "pet":
+                tail = (int(sx - shot.vx * 0.06), int(sy - shot.vy * 0.06))
+                pygame.draw.line(surface, (60, 190, 170), tail, (sx, sy), 2)
+                pygame.draw.circle(surface, (80, 230, 200), (sx, sy), 4)
+                pygame.draw.circle(surface, (230, 255, 240), (sx - 1, sy - 1), 2)
             else:
-                pygame.draw.line(surface, (191, 216, 255), (sx, sy),
-                                 (int(sx - shot.vx * 0.055), int(sy - shot.vy * 0.055)), 2)
-                surface.set_at((sx, sy), (255, 248, 200))
+                if "slash" in self.effect_art:
+                    sprite = self.effect_art["slash"]
+                    rotation = math.degrees(math.atan2(-shot.vy, shot.vx))
+                    rotated = pygame.transform.rotate(sprite, rotation)
+                    surface.blit(rotated, rotated.get_rect(center=(sx, sy)), special_flags=pygame.BLEND_ADD)
+                else:
+                    tail = (int(sx - shot.vx * 0.09), int(sy - shot.vy * 0.09))
+                    pygame.draw.line(surface, (80, 150, 255), tail, (sx, sy), 5)
+                    pygame.draw.line(surface, (205, 235, 255), tail, (sx, sy), 2)
+                    pygame.draw.circle(surface, (255, 255, 255), (sx, sy), 2)
         for x, y, radius, life in game.slashes:
             col = (255, 143, 79) if game.selected_character == "female" and radius > 20 else (133, 215, 247) if radius > 30 else (249, 232, 174)
             pygame.draw.circle(surface, col, (int(x - camera_x), int(y - camera_y)), int(radius * max(0.2, life / 0.22)), 1)
         for enemy in game.enemies:
             self.enemy(surface, enemy, game.time, camera_x, camera_y)
+        for ex, ey, life, max_life, blast_radius in game.explosions:
+            progress = 1.0 - life / max_life
+            sx = int(ex - camera_x)
+            sy = int(ey - camera_y)
+            ring = max(2, int(blast_radius * (0.25 + 0.75 * progress)))
+            pygame.draw.circle(surface, (120, 40, 20), (sx, sy), ring, 3)
+            pygame.draw.circle(surface, (255, int(200 - 100 * progress), 80), (sx, sy), ring, 1)
+            if "explosion" in self.effect_art:
+                size = max(12, int(64 * (0.55 + 0.9 * progress)))
+                sprite = pygame.transform.scale(self.effect_art["explosion"], (size, size))
+                surface.blit(sprite, sprite.get_rect(center=(sx, sy)), special_flags=pygame.BLEND_ADD)
         for x1, y1, x2, y2, _life in game.bolts:
             bx1, by1 = int(x1 - camera_x), int(y1 - camera_y)
             bx2, by2 = int(x2 - camera_x), int(y2 - camera_y)
-            pygame.draw.line(surface, (70, 140, 255), (bx1, by1), (bx2, by2), 4)
-            pygame.draw.line(surface, (225, 248, 255), (bx1, by1), (bx2, by2), 1)
-            pygame.draw.circle(surface, (235, 250, 255), (bx2, by2), 2)
+            self._draw_bolt(surface, bx1, by1, bx2, by2)
+            if "lightning" in self.effect_art:
+                burst = self.effect_art["lightning"]
+                surface.blit(burst, burst.get_rect(center=(bx2, by2)), special_flags=pygame.BLEND_ADD)
         p = game.player
         cx, cy = WIDTH // 2, HEIGHT // 2
+        if p.pet_level:
+            angle = game.time * 2.3
+            px = int(cx + math.cos(angle) * 30)
+            py = int(cy + math.sin(angle) * 22)
+            bob = round(math.sin(game.time * 5) * 1)
+            pygame.draw.circle(surface, (40, 160, 150), (px, py), 12, 1)
+            if self.pet_art:
+                sprite = self.pet_art
+                if math.cos(angle) < 0:
+                    sprite = pygame.transform.flip(self.pet_art, True, False)
+                surface.blit(sprite, sprite.get_rect(center=(px, py - 2 + bob)))
+            else:
+                pygame.draw.circle(surface, (60, 180, 170), (px, py), 8, 1)
+                pygame.draw.circle(surface, (90, 230, 210), (px, py), 5)
+                pygame.draw.circle(surface, (225, 255, 245), (px - 1, py - 1), 2)
+                pygame.draw.polygon(surface, (120, 240, 220), [(px - 4, py - 4), (px - 2, py - 9), (px, py - 4)])
+                pygame.draw.polygon(surface, (120, 240, 220), [(px, py - 4), (px + 2, py - 9), (px + 4, py - 4)])
+                pygame.draw.line(surface, (120, 240, 220), (px + 5, py + 2), (px + 9, py + 6), 2)
         for i in range(p.talisman_level):
             if i >= 8:
                 break
@@ -363,6 +455,30 @@ class Renderer:
             pygame.draw.rect(surface, (255, 232, 157), (x - 1, y - 2, 2, 4))
         if not (p.invulnerable > 0 and int(p.invulnerable * 18) % 2):
             self.player_sprite(surface, p, game.selected_character, game.time)
+
+    @staticmethod
+    def _draw_bolt(surface: pygame.Surface, x1: int, y1: int, x2: int, y2: int) -> None:
+        dx, dy = x2 - x1, y2 - y1
+        length = max(1.0, math.hypot(dx, dy))
+        nx, ny = -dy / length, dx / length
+        rng = random.Random(f"{x1}:{y1}:{x2}:{y2}")
+        points = [(x1, y1)]
+        for step in range(1, 5):
+            t = step / 5
+            offset = rng.uniform(-6, 6)
+            points.append((int(x1 + dx * t + nx * offset), int(y1 + dy * t + ny * offset)))
+        points.append((x2, y2))
+        pygame.draw.lines(surface, (25, 80, 220), False, points, 7)
+        pygame.draw.lines(surface, (80, 170, 255), False, points, 4)
+        pygame.draw.lines(surface, (200, 235, 255), False, points, 2)
+        pygame.draw.lines(surface, (255, 255, 255), False, points, 1)
+        mid = points[2]
+        branch_x = int(mid[0] + nx * rng.uniform(10, 18) + rng.uniform(-4, 4))
+        branch_y = int(mid[1] + ny * rng.uniform(10, 18) + rng.uniform(-4, 4))
+        pygame.draw.line(surface, (100, 190, 255), mid, (branch_x, branch_y), 2)
+        pygame.draw.line(surface, (230, 248, 255), mid, (branch_x, branch_y), 1)
+        pygame.draw.circle(surface, (235, 250, 255), (x2, y2), 3)
+        pygame.draw.circle(surface, (90, 180, 255), (x1, y1), 4, 1)
 
     def player_sprite(self, surface: pygame.Surface, player, character: str, time: float) -> None:
         x, y = WIDTH // 2, HEIGHT // 2
@@ -436,7 +552,7 @@ class Renderer:
         if xp_width > 0:
             pygame.draw.rect(surface, (173, 239, 185), (7, HEIGHT - 7, xp_width, 1))
         self.text(surface, f"灵气 {int(p.xp)}/{int(p.next_xp)}", (8, HEIGHT - 13), 7, (151, 216, 182), "bottomleft")
-        if game.time < 14:
+        if game.time < 14 and game.state == "playing":
             attack_hint = "火球爆燃  ·  范围伤害" if game.selected_character == "female" else "灵剑瞄准  ·  高速单体"
             self.text(surface, f"WASD 移动  ·  {attack_hint}  ·  P 暂停", (WIDTH // 2, 49), 9, (206, 218, 209), "midtop")
 
@@ -446,17 +562,27 @@ class Renderer:
         surface.blit(shade, (0, 0))
 
     def panel(self, surface: pygame.Surface, title: str, subtitle: str, info: str,
-              button: str, accent: tuple[int, int, int]) -> None:
+              button: str, accent: tuple[int, int, int],
+              button_rect: pygame.Rect | None = None,
+              secondary: tuple[str, pygame.Rect] | None = None,
+              hint: str = "Enter 确认") -> None:
         self.veil(surface)
         pygame.draw.rect(surface, (19, 27, 41), PANEL)
         pygame.draw.rect(surface, (73, 85, 96), PANEL, 1)
         pygame.draw.rect(surface, accent, (PANEL.x + 1, PANEL.y + 1, PANEL.w - 2, 2))
-        self.text(surface, "✦", (WIDTH // 2, 69), 12, accent, "midtop")
+        pygame.draw.polygon(
+            surface, accent,
+            [(WIDTH // 2, 67), (WIDTH // 2 + 4, 72), (WIDTH // 2, 77), (WIDTH // 2 - 4, 72)],
+        )
         self.text(surface, title, (WIDTH // 2, 84), 23, accent, "midtop")
         self.text(surface, subtitle, (WIDTH // 2, 119), 10, (206, 214, 222), "midtop")
         self.text(surface, info, (WIDTH // 2, 139), 9, (165, 178, 190), "midtop")
-        self.button(surface, button, PANEL_BUTTON.x, PANEL_BUTTON.y, PANEL_BUTTON.w, PANEL_BUTTON.h, accent)
-        self.text(surface, "Enter 确认", (WIDTH // 2, 201), 8, (136, 150, 163), "midtop")
+        primary = button_rect or PANEL_BUTTON
+        self.button(surface, button, primary.x, primary.y, primary.w, primary.h, accent)
+        if secondary:
+            label, rect = secondary
+            self.button(surface, label, rect.x, rect.y, rect.w, rect.h, (200, 160, 160))
+        self.text(surface, hint, (WIDTH // 2, 201), 8, (136, 150, 163), "midtop")
 
     def button(self, surface: pygame.Surface, label: str, x: int, y: int,
                w: int, h: int, color: tuple[int, int, int]) -> None:
