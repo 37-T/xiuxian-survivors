@@ -7,7 +7,16 @@ import random
 from pathlib import Path
 import pygame
 
-from game import EVOLUTIONS, Game, HEIGHT, RUN_LENGTH, UPGRADES, WIDTH
+from game import (
+    EVOLUTIONS,
+    Game,
+    HEIGHT,
+    RUN_LENGTH,
+    TALISMAN_ORBIT_X,
+    TALISMAN_ORBIT_Y,
+    UPGRADES,
+    WIDTH,
+)
 from layout import (
     CHARACTER_CARDS,
     MENU_PANEL,
@@ -46,6 +55,7 @@ class Renderer:
         self.ground_variants: dict[str, tuple[pygame.Surface, ...]] = {}
         self.ground_ai: dict[str, bool] = {}
         self.pet_art: pygame.Surface | None = None
+        self.pet_attack_art: pygame.Surface | None = None
         self.effect_art: dict[str, pygame.Surface] = {}
         self.hit_overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
         self.text_queue: list[tuple[str, tuple[float, float], int, tuple[int, int, int], str]] | None = None
@@ -106,8 +116,11 @@ class Renderer:
         pet_path = Path(__file__).resolve().parent / "assets" / "pets" / "spirit_fox.png"
         if pet_path.exists():
             self.pet_art = pygame.image.load(str(pet_path)).convert_alpha()
+        pet_attack_path = Path(__file__).resolve().parent / "assets" / "pets" / "spirit_fox_attack.png"
+        if pet_attack_path.exists():
+            self.pet_attack_art = pygame.image.load(str(pet_attack_path)).convert_alpha()
         effects_dir = Path(__file__).resolve().parent / "assets" / "effects"
-        for name in ("fireball", "lightning", "slash", "explosion"):
+        for name in ("fireball", "lightning", "slash", "explosion", "pet_claw"):
             path = effects_dir / f"{name}.png"
             if path.exists():
                 self.effect_art[name] = pygame.image.load(str(path)).convert()
@@ -387,14 +400,13 @@ class Renderer:
                     pygame.draw.circle(surface, (246, 92, 42), (sx, sy), 8)
                     pygame.draw.circle(surface, (255, 168, 72), (sx, sy), 5)
                     pygame.draw.circle(surface, (255, 240, 190), (sx - 1, sy - 1), 2)
-            elif shot.kind == "pet":
-                tail = (int(sx - shot.vx * 0.06), int(sy - shot.vy * 0.06))
-                pygame.draw.line(surface, (60, 190, 170), tail, (sx, sy), 2)
-                pygame.draw.circle(surface, (80, 230, 200), (sx, sy), 4)
-                pygame.draw.circle(surface, (230, 255, 240), (sx - 1, sy - 1), 2)
             else:
+                trail = (int(sx - shot.vx * 0.12), int(sy - shot.vy * 0.12))
+                pygame.draw.line(surface, (70, 130, 255), trail, (sx, sy), 3)
                 if "slash" in self.effect_art:
                     sprite = self.effect_art["slash"]
+                    if game.player.sword_evolution:
+                        sprite = pygame.transform.scale(sprite, (52, 52))
                     rotation = math.degrees(math.atan2(-shot.vy, shot.vx))
                     rotated = pygame.transform.rotate(sprite, rotation)
                     surface.blit(rotated, rotated.get_rect(center=(sx, sy)), special_flags=pygame.BLEND_ADD)
@@ -428,16 +440,30 @@ class Renderer:
                 surface.blit(burst, burst.get_rect(center=(bx2, by2)), special_flags=pygame.BLEND_ADD)
         p = game.player
         cx, cy = WIDTH // 2, HEIGHT // 2
+        for hx, hy, life, max_life in game.pet_hits:
+            progress = 1.0 - life / max_life
+            sx = int(hx - camera_x)
+            sy = int(hy - camera_y)
+            if "pet_claw" in self.effect_art:
+                size = max(16, int(40 * (0.7 + 0.5 * progress)))
+                claw = pygame.transform.scale(self.effect_art["pet_claw"], (size, size))
+                surface.blit(claw, claw.get_rect(center=(sx, sy)), special_flags=pygame.BLEND_ADD)
+            pygame.draw.circle(surface, (90, 220, 200), (sx, sy), max(6, int(12 * progress)), 1)
         if p.pet_level:
-            angle = game.time * 2.3
-            px = int(cx + math.cos(angle) * 30)
-            py = int(cy + math.sin(angle) * 22)
+            px = int(p.pet_x - camera_x)
+            py = int(p.pet_y - camera_y)
             bob = round(math.sin(game.time * 5) * 1)
             pygame.draw.circle(surface, (40, 160, 150), (px, py), 12, 1)
-            if self.pet_art:
+            sprite = None
+            if p.pet_attack_anim > 0 and self.pet_attack_art:
+                sprite = self.pet_attack_art
+                if p.pet_facing > 0:
+                    sprite = pygame.transform.flip(sprite, True, False)
+            elif self.pet_art:
                 sprite = self.pet_art
-                if math.cos(angle) < 0:
-                    sprite = pygame.transform.flip(self.pet_art, True, False)
+                if p.pet_facing < 0:
+                    sprite = pygame.transform.flip(sprite, True, False)
+            if sprite:
                 surface.blit(sprite, sprite.get_rect(center=(px, py - 2 + bob)))
             else:
                 pygame.draw.circle(surface, (60, 180, 170), (px, py), 8, 1)
@@ -450,9 +476,12 @@ class Renderer:
             if i >= 8:
                 break
             a = game.time * 2.3 + math.tau * i / min(8, p.talisman_level)
-            x, y = int(cx + math.cos(a) * 21), int(cy + math.sin(a) * 14)
-            pygame.draw.rect(surface, (244, 184, 92), (x - 2, y - 3, 5, 7))
-            pygame.draw.rect(surface, (255, 232, 157), (x - 1, y - 2, 2, 4))
+            x, y = int(cx + math.cos(a) * TALISMAN_ORBIT_X), int(cy + math.sin(a) * TALISMAN_ORBIT_Y)
+            pygame.draw.circle(surface, (90, 70, 40), (x, y), 8, 1)
+            pygame.draw.rect(surface, (244, 206, 120), (x - 4, y - 7, 8, 14))
+            pygame.draw.rect(surface, (255, 240, 180), (x - 3, y - 6, 6, 12), 1)
+            pygame.draw.line(surface, (196, 62, 52), (x, y - 5), (x, y + 3), 1)
+            pygame.draw.line(surface, (196, 62, 52), (x - 2, y - 2), (x + 2, y - 2), 1)
         if not (p.invulnerable > 0 and int(p.invulnerable * 18) % 2):
             self.player_sprite(surface, p, game.selected_character, game.time)
 
@@ -553,7 +582,7 @@ class Renderer:
             pygame.draw.rect(surface, (173, 239, 185), (7, HEIGHT - 7, xp_width, 1))
         self.text(surface, f"灵气 {int(p.xp)}/{int(p.next_xp)}", (8, HEIGHT - 13), 7, (151, 216, 182), "bottomleft")
         if game.time < 14 and game.state == "playing":
-            attack_hint = "火球爆燃  ·  范围伤害" if game.selected_character == "female" else "灵剑瞄准  ·  高速单体"
+            attack_hint = "火球爆燃  ·  范围伤害" if game.selected_character == "female" else "剑罡穿透  ·  范围伤害"
             self.text(surface, f"WASD 移动  ·  {attack_hint}  ·  P 暂停", (WIDTH // 2, 49), 9, (206, 218, 209), "midtop")
 
     def veil(self, surface: pygame.Surface) -> None:
@@ -615,7 +644,7 @@ class Renderer:
             surface.blit(sprite, sprite.get_rect(center=(card.centerx, card.y + 43)))
             self.text(surface, f"{name}  ·  {subtitle}", (card.centerx, card.y + 78), 9,
                       (240, 220, 173) if selected else (182, 195, 199), "midtop")
-            attack = "灵剑：高速单体" if key == "male" else "火球：爆燃范围"
+            attack = "剑罡：穿透范围" if key == "male" else "火球：爆燃范围"
             self.text(surface, attack, (card.centerx, card.y + 92), 7,
                       (157, 204, 224) if key == "male" else (246, 169, 119), "midtop")
 

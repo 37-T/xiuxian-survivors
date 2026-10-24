@@ -10,4 +10,4 @@ The original third-party PNG files are kept in this folder for reference. The cu
 
 ## Project character art
 
-The player sprites in `assets/characters/` and enemy sprites in `assets/enemies/` were generated with Volcengine Seedream 5.0 Flash from reference images supplied by the project owner. Enemy backgrounds in `assets/backgrounds/`, the seamless battle ground textures in `assets/grounds/`, the spirit-fox pet sprite in `assets/pets/`, and the attack effect sprites in `assets/effects/` were generated with the same model. The large preview drafts are kept out of the repository; the optimized game-ready PNGs are used by the game.
+The player sprites in `assets/characters/` and enemy sprites in `assets/enemies/` were generated with Volcengine Seedream 5.0 Flash from reference images supplied by the project owner. Enemy backgrounds in `assets/backgrounds/`, the seamless battle ground textures in `assets/grounds/`, the spirit-fox idle/attack sprites in `assets/pets/`, and the attack effect sprites in `assets/effects/` were generated with the same model. The large preview drafts are kept out of the repository; the optimized game-ready PNGs are used by the game.

@@ -52,6 +52,11 @@ def main() -> None:
     gameplay.player.xp = 10
     gameplay.player.next_xp = 34
     gameplay.player.pet_level = 1
+    gameplay.player.talisman_level = 4
+    gameplay.player.pet_x, gameplay.player.pet_y = 330, 110
+    gameplay.player.pet_facing = 1
+    gameplay.player.pet_attack_anim = 0.18
+    gameplay.pet_hits = [(330, 110, 0.15, 0.2)]
     gameplay.player.x, gameplay.player.y = 240, 150
     gameplay.enemies = [
         Enemy(110, 80, "raven", 26, 0, 10, 8, (102, 116, 141), attack_cooldown=1.2),

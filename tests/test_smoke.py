@@ -239,16 +239,38 @@ class SmokeTests(unittest.TestCase):
         self.assertLess(second.hp, 100)
         self.assertTrue(game.explosions)
 
-    def test_pet_summon_fires(self) -> None:
+    def test_sword_wave_pierces(self) -> None:
+        game = Game()
+        game.start()
+        game.spawn_timer = 999
+        game.player.cooldown = 999
+        game.player.x, game.player.y = 240, 135
+        targets = [
+            Enemy(100, 135, "wolf", 100, 0, 0, 10, (0, 0, 0)),
+            Enemy(140, 135, "wolf", 100, 0, 0, 10, (0, 0, 0)),
+            Enemy(180, 135, "wolf", 100, 0, 0, 10, (0, 0, 0)),
+        ]
+        game.enemies = list(targets)
+        game.projectiles = [Projectile(80, 135, 205, 0, 12, 1.8, "sword")]
+        for _ in range(90):
+            game.update(1 / 60, FakeKeys())
+        for target in targets:
+            self.assertLess(target.hp, 100)
+
+    def test_pet_melee_attacks(self) -> None:
         game = Game()
         game.start()
         game.spawn_timer = 999
         game.player.cooldown = 999
         game.player.pet_level = 1
         game.player.x, game.player.y = 240, 135
-        game.enemies = [Enemy(390, 135, "wolf", 100, 0, 0, 10, (0, 0, 0))]
+        game.player.pet_x, game.player.pet_y = 240, 135
+        enemy = Enemy(250, 135, "wolf", 100, 0, 0, 10, (0, 0, 0))
+        game.enemies = [enemy]
         game.update(1 / 60, FakeKeys())
-        self.assertTrue(any(shot.kind == "pet" for shot in game.projectiles))
+        self.assertLess(enemy.hp, 100)
+        self.assertTrue(game.pet_hits)
+        self.assertFalse(any(shot.kind == "pet" for shot in game.projectiles))
 
     def test_high_res_text_overlay(self) -> None:
         game = Game()

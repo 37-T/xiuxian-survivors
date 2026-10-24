@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import pygame
 
@@ -25,6 +25,15 @@ POISON_DAMAGE = 7
 FIRE_ZONE_DAMAGE = 10
 FIRE_BLAST_RADIUS = 30
 FIRE_EVO_BLAST_RADIUS = 52
+SWORD_WAVE_WIDTH = 18
+SWORD_EVO_WAVE_WIDTH = 28
+TALISMAN_ORBIT_X = 34
+TALISMAN_ORBIT_Y = 24
+TALISMAN_HIT_RADIUS = 8
+PET_AGGRO_RANGE = 180
+PET_LEASH = 260
+PET_SPEED = 210
+PET_RETURN_SPEED = 150
 
 
 @dataclass
@@ -47,10 +56,14 @@ class Player:
     guard_level: int = 0
     chain_level: int = 0
     pet_level: int = 0
+    pet_x: float = WIDTH / 2 + 34
+    pet_y: float = HEIGHT / 2
+    pet_facing: int = 1
     cooldown: float = 0
     thunder_cooldown: float = 0
     chain_cooldown: float = 0
     pet_cooldown: float = 0
+    pet_attack_anim: float = 0
     facing: str = "down"
     moving: bool = False
     sword_evolution: bool = False
@@ -106,6 +119,7 @@ class Projectile:
     life: float = 1.8
     kind: str = "sword"
     hostile: bool = False
+    hit_ids: set[int] = field(default_factory=set)
 
 
 @dataclass
@@ -120,7 +134,7 @@ UPGRADES = {
     "talisman": ("护身符箓", "增加一枚环绕符箓", "talisman_level"),
     "thunder": ("引雷真诀", "雷霆术威力提高", "thunder_level"),
     "chain": ("雷法·连锁", "自动攻击并弹射附近妖兽", "chain_level"),
-    "pet": ("灵宠召唤", "召唤灵狐自动攻击妖兽", "pet_level"),
+    "pet": ("灵宠召唤", "召唤灵狐巡逻扑咬妖兽", "pet_level"),
     "guard": ("金光护体", "减伤并恢复少许气血", "guard_level"),
     "breath": ("周天吐纳", "气血上限提高并恢复", "breath"),
     "wind": ("御风而行", "移动速度提高", "wind"),
@@ -129,7 +143,7 @@ UPGRADES = {
 }
 
 EVOLUTIONS = {
-    "sword_evo": ("万剑归宗", "灵剑贯穿敌群，伤害提高"),
+    "sword_evo": ("万剑归宗", "剑罡加宽，伤害提高"),
     "fire_evo": ("焚天业火", "爆炸范围扩大并留下灼烧地带"),
     "thunder_evo": ("九霄天劫", "雷击额外连锁附近妖兽"),
     "guard_evo": ("不动明王", "受击时震击周围妖兽"),
@@ -159,6 +173,7 @@ class Game:
         self.slashes: list[tuple[float, float, float, float]] = []
         self.bolts: list[tuple[float, float, float, float, float]] = []
         self.explosions: list[tuple[float, float, float, float, float]] = []
+        self.pet_hits: list[tuple[float, float, float, float]] = []
         self.boss_burst_timer = 0
 
     def start(self) -> None:
@@ -233,6 +248,9 @@ class Game:
         elif key == "chain":
             p.chain_level += 1
         elif key == "pet":
+            if p.pet_level == 0:
+                p.pet_x = p.x + 34
+                p.pet_y = p.y
             p.pet_level += 1
         elif key == "guard":
             p.guard_level += 1
@@ -286,6 +304,7 @@ class Game:
         self.slashes = [(x, y, r, t - dt) for x, y, r, t in self.slashes if t > dt]
         self.bolts = [(x1, y1, x2, y2, t - dt) for x1, y1, x2, y2, t in self.bolts if t > dt]
         self.explosions = [(x, y, t - dt, m, r) for x, y, t, m, r in self.explosions if t > dt]
+        self.pet_hits = [(x, y, t - dt, m) for x, y, t, m in self.pet_hits if t > dt]
 
         self.spawn_timer -= dt
         interval = max(0.32, 1.05 - self.time / 720)
@@ -329,19 +348,39 @@ class Game:
                     p.chain_cooldown = max(0.8, 2.2 - p.chain_level * 0.2)
 
         if p.pet_level:
-            p.pet_cooldown -= dt
-            if p.pet_cooldown <= 0:
-                angle = self.time * 2.3
-                pet_x = p.x + math.cos(angle) * 30
-                pet_y = p.y + math.sin(angle) * 22
-                target = self.nearest_enemy(190)
-                if target:
-                    vx, vy = target.x - pet_x, target.y - pet_y
-                    dist = max(1, math.hypot(vx, vy))
-                    self.projectiles.append(Projectile(
-                        pet_x, pet_y, vx / dist * 230, vy / dist * 230,
-                        6 + p.pet_level * 4, 1.6, "pet"))
-                    p.pet_cooldown = max(0.75, 1.9 - p.pet_level * 0.12)
+            p.pet_cooldown = max(0.0, p.pet_cooldown - dt)
+            p.pet_attack_anim = max(0.0, p.pet_attack_anim - dt)
+            patrol_angle = self.time * 1.8
+            home_x = p.x + math.cos(patrol_angle) * 42
+            home_y = p.y + math.sin(patrol_angle) * 28
+            target = self.nearest_enemy(PET_AGGRO_RANGE)
+            if target and math.hypot(target.x - p.x, target.y - p.y) > PET_LEASH:
+                target = None
+            if target:
+                dx = target.x - p.pet_x
+                dy = target.y - p.pet_y
+                distance = math.hypot(dx, dy)
+                p.pet_facing = 1 if dx >= 0 else -1
+                melee_range = target.radius + 12
+                if distance > melee_range:
+                    step = min(distance - melee_range, PET_SPEED * dt)
+                    if distance:
+                        p.pet_x += dx / distance * step
+                        p.pet_y += dy / distance * step
+                elif p.pet_cooldown <= 0:
+                    self.damage_enemy(target, 8 + p.pet_level * 4)
+                    p.pet_cooldown = max(0.6, 1.5 - p.pet_level * 0.1)
+                    p.pet_attack_anim = 0.18
+                    self.pet_hits.append((target.x, target.y, 0.2, 0.2))
+            else:
+                dx = home_x - p.pet_x
+                dy = home_y - p.pet_y
+                distance = math.hypot(dx, dy)
+                if distance > 4:
+                    step = min(distance, PET_RETURN_SPEED * dt)
+                    p.pet_x += dx / distance * step
+                    p.pet_y += dy / distance * step
+                    p.pet_facing = 1 if dx >= 0 else -1
 
         if p.thunder_level:
             p.thunder_cooldown -= dt
@@ -372,6 +411,21 @@ class Game:
                 elif shot.life <= 0 or self._out_of_range(shot.x, shot.y):
                     self.projectiles.remove(shot)
                 continue
+            if shot.kind == "sword":
+                # The male cultivator's sword-qi wave pierces every enemy it crosses.
+                prev_x = shot.x - shot.vx * dt
+                prev_y = shot.y - shot.vy * dt
+                wave_width = SWORD_EVO_WAVE_WIDTH if p.sword_evolution else SWORD_WAVE_WIDTH
+                for enemy in self.enemies[:]:
+                    if id(enemy) in shot.hit_ids:
+                        continue
+                    if self._point_segment_distance(enemy.x, enemy.y, prev_x, prev_y, shot.x, shot.y) < enemy.radius + wave_width:
+                        self.damage_enemy(enemy, shot.damage)
+                        shot.hit_ids.add(id(enemy))
+                        self.slashes.append((enemy.x, enemy.y, 18, 0.12))
+                if shot.life <= 0 or self._out_of_range(shot.x, shot.y):
+                    self.projectiles.remove(shot)
+                continue
             hit = next((e for e in self.enemies if math.hypot(e.x - shot.x, e.y - shot.y) < e.radius + 4), None)
             if hit:
                 if shot.kind == "fire":
@@ -382,18 +436,8 @@ class Game:
                     if p.fire_evolution:
                         self.hazards.append(Hazard(hit.x, hit.y, 25, 2.8, hostile=False))
                     self.explosions.append((hit.x, hit.y, 0.28, 0.28, blast_radius))
-                elif shot.kind == "pet":
-                    self.damage_enemy(hit, shot.damage)
-                    self.slashes.append((shot.x, shot.y, 14, 0.12))
                 else:
-                    if p.sword_evolution:
-                        for enemy in self.enemies[:]:
-                            if self._point_segment_distance(enemy.x, enemy.y, shot.x, shot.y,
-                                    shot.x + shot.vx / max(1, math.hypot(shot.vx, shot.vy))*115,
-                                    shot.y + shot.vy / max(1, math.hypot(shot.vx, shot.vy))*115) < enemy.radius + 7:
-                                self.damage_enemy(enemy, shot.damage)
-                    else:
-                        self.damage_enemy(hit, shot.damage)
+                    self.damage_enemy(hit, shot.damage)
                     self.slashes.append((shot.x, shot.y, 17, 0.12))
                 self.projectiles.remove(shot)
             elif shot.life <= 0 or self._out_of_range(shot.x, shot.y):
@@ -481,9 +525,9 @@ class Game:
             for enemy in self.enemies[:]:
                 for i in range(count):
                     angle = self.time * 2.3 + math.tau * i / count
-                    tx = p.x + math.cos(angle) * 21
-                    ty = p.y + math.sin(angle) * 14
-                    if math.hypot(enemy.x - tx, enemy.y - ty) < enemy.radius + 4:
+                    tx = p.x + math.cos(angle) * TALISMAN_ORBIT_X
+                    ty = p.y + math.sin(angle) * TALISMAN_ORBIT_Y
+                    if math.hypot(enemy.x - tx, enemy.y - ty) < enemy.radius + TALISMAN_HIT_RADIUS:
                         self.damage_enemy(enemy, (6 + p.talisman_level * 2) * dt * 4)
                         break
 
